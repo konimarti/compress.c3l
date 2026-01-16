@@ -4,8 +4,6 @@ module compress::flate::huff;
 
 import std::bits;
 
-const MAX_BITS = 16;
-
 faultdef ERR_CODEGEN;
 
 struct HuffTree
@@ -20,12 +18,12 @@ struct HuffTree
 *>
 fn void? HuffTree.init(&self, char[] blen)
 {
-	self.blen[:16] = blen[:16];
+	self.blen[:blen.len] = blen[..];
 	self.max_sym = codegen(&self.codes, &self.blen)!;
 }
 
 <*
- Generate canoncial Huffman codes according to RFC section 3.2.2.
+ Generate canonical Huffman codes according to RFC section 3.2.2.
 
  @param [out] codes : "Canonical Huffman codes."
  @param [in] blen   : "Bit lengths for Huffman codes"
@@ -38,13 +36,13 @@ fn int? codegen(uint[] codes, char[] blen)
 
 	foreach (len: blen)
 	{
-		assert(len < 16);
+		assert(len < 16, "got: %d", len);
 		bl_count[len]++;
 	}
 	bl_count[0] = 0;
 
 	uint code = 0;
-	for (uint bits = 1; bits <= MAX_BITS; bits++)
+	for (uint bits = 1; bits <= flate::MAX_BITS; bits++)
 	{
 	        code = (code + bl_count[bits-1]) << 1;
 		next_code[bits-1] = code;
@@ -69,4 +67,3 @@ fn void test_huff_codegen() @test
 	assert(codegen(&codes, &blen)!! == 3);
 	assert(codes == want);
 }
-

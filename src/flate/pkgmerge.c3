@@ -19,7 +19,7 @@ fn usz? IndexMap.to_format(&self, Formatter *f) @dynamic => f.printf("(%d)", sel
 
  [1] https://create.stephan-brumme.com/length-limited-prefix-codes/
 *>
-fn char[] codelen(Allocator allocator, uint[] freqs, uint max_bits) => @pool()
+fn char[] bitlen(Allocator allocator, uint[] freqs, uint max_bits) => @pool()
 {
 	List{IndexMap} map;
 	map.tinit();
@@ -33,18 +33,22 @@ fn char[] codelen(Allocator allocator, uint[] freqs, uint max_bits) => @pool()
 		n++;
 	}
 
+	if (n == 0) return {};
+
 	// Sort frequencies in ascending order.
 	sort::quicksort(map.array_view());
 
 	uint[] hist = mem::temp_array(uint, n);
 	foreach (i, m: map) hist[i] = m.freq;
 
+
 	// One or two codes are encoded with a single bit.
-	if (n <= 2)
+	// if (n <= 2)
+	if (n <= 1)//  FIXME
 	{
-		char[] len = mem::temp_array(char, n);
-		len[0] = 1;
-		return len;
+		char[] blen = allocator::new_array(allocator, char, freqs.len);
+		foreach (m:map) blen[m.index] = 1;
+		return blen;
 	}
 
 	// Require two scratch buffers to process iterations and some bitmasks.
@@ -169,7 +173,7 @@ fn char[] codelen(Allocator allocator, uint[] freqs, uint max_bits) => @pool()
 fn void test_pkgmerge_codelen() @test => @pool()
 {
 	uint[] freqs = {2,3,1,1};
-	char[] blen = codelen(tmem, freqs, 3);
+	char[] blen = bitlen(tmem, freqs, 3);
 	assert(freqs.len == blen.len);
 	assert(blen == {2,1,3,3});
 }
