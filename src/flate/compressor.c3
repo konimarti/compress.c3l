@@ -105,6 +105,40 @@ fn void? HuffCompressor.write_dynamic_header(&self, bool final = true) => @pool(
 	{
 		self.stream.write(rl.codes[len], rl.blen[len]);
 	}
+
+	// Logic needs to move to beginning, so that run-length codes can get the proper frequencies:
+	// for (i = 0; i < seq.len();)
+	// {
+	// 	usz len = seq[i];
+	// 	uint r = 1;
+	// 	while (i < seq.len() && seq[(usz)(i+r)] == len) r++;
+	// 	switch
+	// 	{
+	// 		case r == 1 || r == 2:
+	// 			while (r--) self.stream.write(rl.codes[len], rl.blen[len]);
+	// 			i += r;
+	// 		case r >= 4 && len != 0:
+	// 			// Case 16
+	// 			self.stream.write(rl.codes[len], rl.blen[len]);
+	// 			self.stream.write(rl.codes[16], rl.blen[16]);
+	// 			i+=r;
+	// 			r--;
+	// 			r = r > 6 ? 6 : r;
+	// 			self.stream.write(r-3, 2);
+	// 		case r >= 3 && r <=10 && len == 0:
+	// 			// Case 17
+	// 			self.stream.write(rl.codes[17], rl.blen[17]);
+	// 			self.stream.write(r-3, 3);
+	// 			i += r;
+	// 		case r >= 11 && len == 0:
+	// 			// Case 18
+	// 			self.stream.write(rl.codes[18], rl.blen[18]);
+	// 			r = r > 138 ? 138 : r;
+	// 			self.stream.write(r-11, 7);
+	// 			i += r;
+	// 	}
+        //
+	// }
 }
 
 fn void? HuffCompressor.build_fixed_trees(&self)
