@@ -144,7 +144,7 @@ fn void? HuffCompressor.build_trees(&self, Token[] tokens)
 
 }
 
-fn void? HuffCompressor.write_dynamic_header(&self) => @pool()
+fn void? HuffCompressor.write_dynamic_header(&self, bool final = true) => @pool()
 {
 	uint i, hlit, hdist, hclen;
 
@@ -166,8 +166,9 @@ fn void? HuffCompressor.write_dynamic_header(&self) => @pool()
 	HuffTree rl = huff::make_tree(&rl_freqs, 5)!;
 
 	// Write dynamic block header.
-	// Push BFINAL (0b1) and BTYPE (0b10).
-	self.stream.write(0b101, 3);
+	// Push BFINAL (0b1 or 0b0) and BTYPE (0b10).
+	self.stream.write(final ? 1 : 0, 1);
+	self.stream.write(0b10, 2);
 
 	// Write 5 bits HLIT (# of literal/length codes - 257)
 	hlit = (self.lt.max_sym < 257) ? 0 : self.lt.max_sym + 1 - 257;
