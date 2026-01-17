@@ -84,14 +84,16 @@ fn void BitStream.fill(&self)
 fn Type[]? BitStream.flush(&self, Allocator allocator, bool fill = false)
 {
 	if (fill) self.fill();
+	usz q = self.bitpos % BITS;
 	usz len = self.bitpos / BITS;
 	if (len == 0) return NOT_ENOUGH_BITS?;
-	Type[] array = allocator::new_array(allocator, Type, len);
-	array[..] = self.list.array_view()[:len];
-	while (len--)
+	Type[] array = self.list.to_array(allocator)[:len];
+	Type last = self.list[^1];
+	self.bitpos -= BITS * len;
+	self.list.clear();
+	if (!fill && q > 0)
 	{
-		self.list.pop_first()!;
-		self.bitpos -= BITS;
+		self.list.push(last);
 	}
 	return array;
 }
