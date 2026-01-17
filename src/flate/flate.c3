@@ -101,20 +101,23 @@ fn char[]? deflate_fixed_block(Allocator allocator, char[] bytes) => @pool()
 }
 
 module compress::deflate::test @test;
-import std::encoding::hex, std::io, compress::flate;
+import compress::flate;
 
 fn void test_deflate_dynamic_block() => @pool()
 {
 	char[] bytes = "hello world world hello";
 	char[] comp = flate::deflate_dynamic_block(tmem, bytes)!!;
-	io::printfn("dynamic: %s", hex::tencode(comp));
+	char[] want = x`2dc8010400000803410000008000000000000000005084670401`
+		      x`000000000000000000000000000000008c0487eb02c56ac8f7c6`;
+	assert(comp == want);
 }
 
 fn void test_deflate_fixed_block() => @pool()
 {
 	char[] bytes = "hello world world hello";
 	char[] fixed = flate::deflate_fixed_block(tmem, bytes)!!;
-	io::printfn("fixed: %s", hex::tencode(fixed));
+	char[] want = x`cb48cdc9c95728cf2fca498192601100`;
+	assert(fixed == want);
 }
 
 fn void test_deflate_non_compressed_blocks() => @pool()

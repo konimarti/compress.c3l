@@ -1,5 +1,8 @@
 // Copyright (c) 2026 Koni Marti. All rights reserved.
 // Use of this source code is governed by the MIT license.
+<*
+ @require Type.kindof == UNSIGNED_INT
+*>
 module compress::flate::bitstream{Type};
 import std::io, std::collections::list, std::encoding::hex;
 
