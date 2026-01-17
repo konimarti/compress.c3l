@@ -19,7 +19,7 @@ fn usz? IndexMap.to_format(&self, Formatter *f) @dynamic => f.printf("(%d)", sel
 
  [1] https://create.stephan-brumme.com/length-limited-prefix-codes/
 *>
-fn char[] bitlen(Allocator allocator, uint[] freqs, uint max_bits) => @pool()
+fn char[] codelen(Allocator allocator, uint[] freqs, uint max_bits) => @pool()
 {
 	List{IndexMap} map;
 	map.tinit();
@@ -173,7 +173,7 @@ fn char[] bitlen(Allocator allocator, uint[] freqs, uint max_bits) => @pool()
 fn void test_pkgmerge_codelen() @test => @pool()
 {
 	uint[] freqs = {2,3,1,1};
-	char[] blen = bitlen(tmem, freqs, 3);
+	char[] blen = codelen(tmem, freqs, 3);
 	assert(freqs.len == blen.len);
 	assert(blen == {2,1,3,3});
 }

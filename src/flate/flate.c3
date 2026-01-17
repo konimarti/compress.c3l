@@ -22,7 +22,6 @@ fn char[]? uncompress(Allocator allocator, char[] bytes)
 fn char[]? tuncompress(char[] bytes) @inline => uncompress(tmem, bytes);
 
 
-const MAX_BITS = 16;
 const MAX_BLOCK_SIZE = 65_535;
 const END_OF_BLOCK = 256;
 
@@ -139,8 +138,8 @@ fn void? HuffCompressor.build_trees(&self, Token[] tokens)
 
 	@pool()
 	{
-		self.lt.init(pkgmerge::bitlen(tmem, &lt_freqs, MAX_BITS))!;
-		self.dt.init(pkgmerge::bitlen(tmem, &dt_freqs, MAX_BITS))!;
+		self.lt = huff::make_tree(&lt_freqs)!;
+		self.dt = huff::make_tree(&dt_freqs)!;
 	};
 
 }
@@ -164,8 +163,7 @@ fn void? HuffCompressor.write_dynamic_header(&self) => @pool()
 		rl_freqs[len]++;
 	}
 
-	HuffTree rl;
-	rl.init(pkgmerge::bitlen(tmem, &rl_freqs, 5))!;
+	HuffTree rl = huff::make_tree(&rl_freqs, 5)!;
 
 	// Write dynamic block header.
 	// Push BFINAL (0b1) and BTYPE (0b10).

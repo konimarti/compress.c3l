@@ -2,7 +2,9 @@
 // Use of this source code is governed by the MIT license.
 module compress::flate::huff;
 
-import std::bits;
+import std::bits, compress::flate::pkgmerge;
+
+const MAX_BITS = 16;
 
 faultdef ERR_CODEGEN;
 
@@ -14,12 +16,16 @@ struct HuffTree
 }
 
 <*
- @require blen.len <= 288 : "Cannot be larger than 288"
+ Make a Huffman tree from symbol frequencies.
+
+ @require freqs.len <= 288 : "Cannot be larger than 288"
 *>
-fn void? HuffTree.init(&self, char[] blen)
+fn HuffTree? make_tree(uint[] freqs, uint max_bits = MAX_BITS) => @pool()
 {
-	self.blen[:blen.len] = blen[..];
-	self.max_sym = codegen(&self.codes, &self.blen)!;
+	HuffTree h;
+	h.blen[:freqs.len] = pkgmerge::codelen(tmem, freqs, max_bits)[..];
+	h.max_sym = codegen(&h.codes, &h.blen)!;
+	return h;
 }
 
 <*
@@ -44,7 +50,7 @@ fn int? codegen(uint[] codes, char[] blen)
 	bl_count[0] = 0;
 
 	uint code = 0;
-	for (uint bits = 1; bits <= flate::MAX_BITS; bits++)
+	for (uint bits = 1; bits <= MAX_BITS; bits++)
 	{
 	        code = (code + bl_count[bits-1]) << 1;
 		next_code[bits-1] = code;
