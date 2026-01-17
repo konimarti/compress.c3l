@@ -39,6 +39,8 @@ fn int? codegen(uint[] codes, char[] blen)
 		assert(len < 16, "got: %d", len);
 		bl_count[len]++;
 	}
+
+	if (bl_count[0] == blen.len) return 0;
 	bl_count[0] = 0;
 
 	uint code = 0;

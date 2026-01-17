@@ -3,6 +3,7 @@
 module compress::flate;
 
 import std::collections::list;
+import std::io; // TODO: Nedded?
 
 fn char[]? compress(Allocator allocator, char[] bytes)
 {
@@ -92,7 +93,7 @@ fn char[]? deflate_dynamic_block(Allocator allocator, char[] bytes) => @pool()
 	HuffCompressor c;
 	c.init(tmem);
 	c.build_trees(tokens)!;
-	c.write_dynamic_header(tokens)!;
+	c.write_dynamic_header()!;
 	c.write_compressed_data(tokens)!;
 	c.write_end_of_block();
 	return c.stream.flush(allocator, true)!;
@@ -139,23 +140,12 @@ fn void? HuffCompressor.build_trees(&self, Token[] tokens)
 	@pool()
 	{
 		self.lt.init(pkgmerge::bitlen(tmem, &lt_freqs, MAX_BITS))!;
-		if (self.lt.max_sym > END_OF_BLOCK)
-		{
-			// io::printfn("dt.max_sym: %d", self.dt.max_sym);
-			// io::printfn("pkgmergE: %s", pkgmerge::bitlen(tmem, &dt_freqs, MAX_BITS));
-			self.dt.init(pkgmerge::bitlen(tmem, &dt_freqs, MAX_BITS))!;
-		}
-		else
-		{
-			// Special case: Handle no distance codes.
-			self.dt.max_sym = 1;
-			self.dt.blen[0] = 0;
-		}
+		self.dt.init(pkgmerge::bitlen(tmem, &dt_freqs, MAX_BITS))!;
 	};
 
 }
 
-fn void? HuffCompressor.write_dynamic_header(&self, Token[] tokens) => @pool()
+fn void? HuffCompressor.write_dynamic_header(&self) => @pool()
 {
 	uint i, hlit, hdist, hclen;
 
@@ -211,7 +201,6 @@ fn void? HuffCompressor.write_dynamic_header(&self, Token[] tokens) => @pool()
 		self.stream.write(rl.codes[len], rl.blen[len]);
 	}
 }
-import std::io;
 
 fn void? HuffCompressor.write_compressed_data(&self, Token[] tokens)
 {
@@ -323,6 +312,7 @@ import std::encoding::hex;
 fn void test_deflate_dynamic_huff_codes() @test
 {
 	char[] bytes = "hello world world hello";
+	// char[] bytes = "hello world";
 	char[] comp = deflate_dynamic_block(tmem, bytes)!!;
 	io::printfn("%s", hex::tencode(comp));
 }
