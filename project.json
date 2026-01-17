@@ -4,8 +4,9 @@
 	"output": "build",
 	"sources": [ "src/**" ],
 	"targets": {
-		"testrunner": {
-			"type": "executable"
+		"ffup": {
+			"type": "executable",
+			"sources": [ "src/ffup/main.c3" ]
 		}
 	}
 }
