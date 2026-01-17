@@ -107,8 +107,7 @@ fn void test_deflate_dynamic_block() => @pool()
 {
 	char[] bytes = "hello world world hello";
 	char[] comp = flate::deflate_dynamic_block(tmem, bytes)!!;
-	char[] want = x`2dc8010400000803410000008000000000000000005084670401`
-		      x`000000000000000000000000000000008c0487eb02c56ac8f7c6`;
+	char[] want = x`2de8b1090000080341ace2700a160f011bd70f88cd15d7058ad590ef8d01`;
 	assert(comp == want);
 }
 

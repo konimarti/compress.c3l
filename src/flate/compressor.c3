@@ -50,26 +50,214 @@ fn void? HuffCompressor.build_trees(&self, Token[] tokens)
 
 }
 
+struct CodeLength
+{
+	char len;   // Code lengths [0..18]
+	char extra; // Extra bits (depening on code length code)
+}
+alias CodeLengthList = List{CodeLength};
+
+struct CodeLengthEncoder
+{
+	CodeLength[] enc;
+	HuffTree ct;
+	int max_sym;
+}
+
+fn void? CodeLengthEncoder.init(&self, Allocator allocator, char[] lt_len, char[] dt_len) => @pool()
+{
+	usz i, n;
+	char[] seq;
+
+	// Combine literal/length and distance code lengths.
+	n = lt_len.len + dt_len.len;
+	seq = mem::temp_array(char, n);
+	foreach (len: lt_len) seq[i++] = len;
+	foreach (len: dt_len) seq[i++] = len;
+
+	// Encode the code lengths.
+	CodeLengthList enc;
+	enc.tinit(); // Allocate a bit more than necessary
+	encode_code_lengths(&enc, seq);
+	self.enc = enc.to_array(allocator);
+
+	// Calculate frequencies of the encoded code lengths.
+	self.max_sym = -1;
+	uint[19] freqs;
+	foreach (cl: self.enc)
+	{
+		assert(cl.len < 19);
+		freqs[cl.len]++;
+		if (hc_order[cl.len] > self.max_sym)
+		{
+			self.max_sym = hc_order[cl.len];
+		}
+	}
+	assert(self.max_sym >= 0);
+
+	// Create code length codes.
+	self.ct = huff::make_tree(freqs[..], 5)!;
+}
+
+fn void encode_code_lengths(CodeLengthList *cl, char[] seq)
+{
+	usz r, rem;
+	for (usz i = 0; i < seq.len;)
+	{
+		assert(seq[i] < huff::MAX_BITS);
+		char len = seq[i];
+
+		// Count repetitions of length len.
+		r = 1;
+		while (i+r < seq.len && seq[(usz)(i+r)] == len) r++;
+
+		if (len == 0)
+		{
+			// Encode code length 0 with r repetitions.
+			switch
+			{
+				case r < 3:
+					while (r--)
+					{
+						cl.push({len, 0});
+						i++;
+					}
+				case r >= 3 && r < 11:
+					cl.push({17, (char)r - 3});
+					i += r;
+				case r >= 11:
+					while (r > 10)
+					{
+						rem = r > 138 ? 138 : r;
+						cl.push({18, (char)rem - 11});
+						r -= rem;
+						i += rem;
+					}
+			}
+		}
+		else
+		{
+			// Encode code length != 0 with r repetitions.
+			if (r > 3)
+			{
+				// Emit code length.
+				cl.push({len, 0});
+				i++; r--;
+
+				// Emit code 16.
+				while (r > 2)
+				{
+					rem = r > 6 ? 6 : r;
+					cl.push({16, (char)rem - 3});
+					r -= rem;
+					i += rem;
+				}
+			}
+			else
+			{
+				// Emit code lengths.
+				while (r--)
+				{
+					cl.push({len, 0});
+					i++;
+				}
+			}
+		}
+	}
+}
+
+struct CodeLengthTestCase
+{
+	char[] input;
+	CodeLength[] want;
+}
+
+fn void test_code_length_encoding() @test => @pool()
+{
+	CodeLengthTestCase[*] tests = {
+		{
+			.input = {1,2,3,4},
+			.want = {{1,0},{2,0},{3,0},{4,0}},
+		},
+		{
+			.input = {1,1},
+			.want = {{1,0},{1,0}},
+		},
+		{
+			.input = {1,1,1},
+			.want = {{1,0},{1,0},{1,0}},
+		},
+		{
+			.input = {1,1,1,1},
+			.want = {{1,0},{16,0}},
+		},
+		{
+			.input = {1,1,1,1,1,1,1},
+			.want = {{1,0},{16,3}},
+		},
+		{
+			.input = {1,1,1,1,1,1,1,1},
+			.want = {{1,0},{16,3},{1,0}},
+		},
+		{
+			.input = {0,0},
+			.want = {{0,0},{0,0}},
+		},
+		{
+			.input = {0,0,0},
+			.want = {{17,0}},
+		},
+		{
+			.input = {0,0,0,0,0},
+			.want = {{17,2}},
+		},
+		{
+			.input = {[9]=0},
+			.want = {{17,7}},
+		},
+		{
+			.input = {[10]=0},
+			.want = {{18,0}},
+		},
+		{
+			.input = {[11]=0},
+			.want = {{18,1}},
+		},
+		{
+			.input = {[137]=0},
+			.want = {{18,127}},
+		},
+		{
+			.input = {[138]=0},
+			.want = {{18,127},{0,0}},
+		},
+	};
+
+	foreach (j, test: tests)
+	{
+		CodeLengthList enc;
+		encode_code_lengths(&enc, test.input);
+		test::eq(enc.len(), test.want.len);
+		foreach (i, got: enc)
+		{
+			test::eq(got.len, test.want[i].len);
+			test::eq(got.extra, test.want[i].extra);
+		}
+	}
+}
+
+
 fn void? HuffCompressor.write_dynamic_header(&self, bool final = true) => @pool()
 {
 	uint i, hlit, hdist, hclen;
 
-	// Create run-length codes.
-	uint[*] rl_freqs = {
-		[0..18] = 0,
-	};
-	foreach (len: self.lt.blen)
-	{
-		if (hc_order[len] > hclen) hclen = hc_order[len];
-		rl_freqs[len]++;
-	}
-	foreach (len: self.dt.blen)
-	{
-		if (hc_order[len] > hclen) hclen = hc_order[len];
-		rl_freqs[len]++;
-	}
+	hlit = (self.lt.max_sym < 257) ? 0 : self.lt.max_sym + 1 - 257;
+	hdist = self.dt.max_sym;
 
-	HuffTree rl = huff::make_tree(&rl_freqs, 5)!;
+	// Create run-length codes.
+	CodeLengthEncoder cle;
+	cle.init(tmem, self.lt.blen[:hlit+257], self.dt.blen[:hdist+1])!;
+	hclen = cle.max_sym + 1 - 4;
 
 	// Write dynamic block header.
 	// Push BFINAL (0b1 or 0b0) and BTYPE (0b10).
@@ -77,68 +265,34 @@ fn void? HuffCompressor.write_dynamic_header(&self, bool final = true) => @pool(
 	self.stream.write(0b10, 2);
 
 	// Write 5 bits HLIT (# of literal/length codes - 257)
-	hlit = (self.lt.max_sym < 257) ? 0 : self.lt.max_sym + 1 - 257;
 	assert(hlit <= 31);
 	self.stream.write(hlit, 5);
 
 	// Write 5 bits HDIST (# of distance codes - 1)
-	hdist = self.dt.max_sym;
 	assert(hdist+1 > 0 && hdist < 30);
 	self.stream.write(hdist, 5);
 
 	// Push 4 bits HCLEN (# of code length codes - 4)
 	assert(hclen >= 4);
-	hclen -= 4;
 	self.stream.write(hclen, 4);
 
 	for (i = 0; i < hclen + 4; i++)
 	{
-		self.stream.write(rl.blen[hc_order[i]], 3);
+		self.stream.write(cle.ct.blen[hc_order[i]], 3);
 	}
 
-	// TODO: Repetitions in sequence should be encoded with 16, 17, 18
-	List{char} seq;
-	seq.tinit((usz)(hlit + hdist + 258));
-	seq.push_all(self.lt.blen[0:hlit+257]);
-	seq.push_all(self.dt.blen[0:hdist+1]);
-	foreach (len: seq)
+	// Write encoded code length.
+	foreach (c: cle.enc)
 	{
-		self.stream.write(rl.codes[len], rl.blen[len]);
+		self.stream.write(cle.ct.codes[c.len], cle.ct.blen[c.len]);
+		switch (c.len)
+		{
+			case 16: self.stream.write(c.extra, 2);
+			case 17: self.stream.write(c.extra, 3);
+			case 18: self.stream.write(c.extra, 7);
+		}
 	}
 
-	// Logic needs to move to beginning, so that run-length codes can get the proper frequencies:
-	// for (i = 0; i < seq.len();)
-	// {
-	// 	usz len = seq[i];
-	// 	uint r = 1;
-	// 	while (i < seq.len() && seq[(usz)(i+r)] == len) r++;
-	// 	switch
-	// 	{
-	// 		case r == 1 || r == 2:
-	// 			while (r--) self.stream.write(rl.codes[len], rl.blen[len]);
-	// 			i += r;
-	// 		case r >= 4 && len != 0:
-	// 			// Case 16
-	// 			self.stream.write(rl.codes[len], rl.blen[len]);
-	// 			self.stream.write(rl.codes[16], rl.blen[16]);
-	// 			i+=r;
-	// 			r--;
-	// 			r = r > 6 ? 6 : r;
-	// 			self.stream.write(r-3, 2);
-	// 		case r >= 3 && r <=10 && len == 0:
-	// 			// Case 17
-	// 			self.stream.write(rl.codes[17], rl.blen[17]);
-	// 			self.stream.write(r-3, 3);
-	// 			i += r;
-	// 		case r >= 11 && len == 0:
-	// 			// Case 18
-	// 			self.stream.write(rl.codes[18], rl.blen[18]);
-	// 			r = r > 138 ? 138 : r;
-	// 			self.stream.write(r-11, 7);
-	// 			i += r;
-	// 	}
-        //
-	// }
 }
 
 fn void? HuffCompressor.build_fixed_trees(&self)
