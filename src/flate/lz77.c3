@@ -60,7 +60,7 @@ fn usz? Token.to_format(&self, Formatter *f) @dynamic
 	}
 }
 
-const uint HASH_MASK = (1U << 16) - 1;
+const uint HASH_MASK = (1U << 15) - 1;
 alias HashKey  = ushort;
 fn HashKey lz77_hash(char[3] b)
 {
@@ -81,7 +81,7 @@ alias MatchPair = Pair{uint, ushort};
 fn MatchPair find_max_match(HashChain *chain, char[] bytes, usz idx) @private @inline
 {
 	ushort max_match_len, len;
-	uint max_match_off, offset;
+	isz max_match_off, offset;
 
 	max_match_len = 0;
 	max_match_off = 0;
@@ -93,7 +93,8 @@ fn MatchPair find_max_match(HashChain *chain, char[] bytes, usz idx) @private @i
 		isz hash_pos = node.value;
 		assert(idx >= hash_pos);
 
-		offset = (uint)(idx - hash_pos);
+		offset = idx - hash_pos;
+		if (offset < 0) continue;
 		if (offset > MAX_WINDOW_SIZE)
 		{
 			// Remove this node from the hash chain.
@@ -104,7 +105,7 @@ fn MatchPair find_max_match(HashChain *chain, char[] bytes, usz idx) @private @i
 		}
 
 		// Find max match length.
-		len = 3;
+		len = 0;
 		while ((idx + len) < bytes.len && bytes[hash_pos+len] == bytes[idx+len])
 		{
 			len++;
@@ -120,7 +121,7 @@ fn MatchPair find_max_match(HashChain *chain, char[] bytes, usz idx) @private @i
 		node = node.next;
 	}
 
-	return {max_match_off, (max_match_len > MAX_MATCH_LEN) ? MAX_MATCH_LEN : max_match_len};
+	return {(uint)max_match_off, (max_match_len > MAX_MATCH_LEN) ? MAX_MATCH_LEN : max_match_len};
 }
 
 fn HashChain make_hash_chain(Allocator allocator, usz... elements)
@@ -184,7 +185,7 @@ fn Token[] tokenize(Allocator allocator, char[] bytes) => @pool()
 
 		uint offset = match.first;
 		ushort len  = match.second;
-		if (len > 0 && offset > 0)
+		if (len >= MIN_MATCH_LEN && offset >= MIN_OFFSET_LEN)
 		{
 			// Emit match token.
 			tokens.push(make_match(len, offset));
@@ -261,3 +262,145 @@ fn void test_lz77() @test => @pool()
 	}
 }
 
+fn void test_lz77_long_text() @test => @pool()
+{
+	String text = `
+{
+  "provides" : "compress",
+  "sources" : [ "src/**" ],
+  "targets" : {
+    "android-aarch64" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+    "freebsd-x64" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+    "linux-aarch64" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+    "linux-riscv32" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+    "linux-riscv64" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+    "linux-x86" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+    "linux-x64" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+    "macos-aarch64" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+    "macos-x64" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+    "netbsd-aarch64" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+    "netbsd-x64" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+    "openbsd-x64" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+    "wasm32" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+    "wasm64" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+    "windows-aarch64" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+    "windows-x64" : {
+      // Extra flags to the linker for this target:
+      "link-args" : [],
+      // C3 libraries this target depends on:
+      "dependencies" : [],
+      // The external libraries to link for this target:
+      "linked-libraries" : []
+    },
+  }
+}
+	`;
+	Token[] tokens = tokenize(tmem, text);
+	String r = (String)construct(tmem, tokens);
+	test::eq(r, text);
+}
