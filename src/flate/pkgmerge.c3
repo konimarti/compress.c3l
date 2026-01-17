@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Koni Marti. All rights reserved.
 // Use of this source code is governed by the MIT license.
 module compress::flate::pkgmerge;
-import std::io, std::sort, std::collections::list;
+import std::sort, std::collections::list;
 
 struct IndexMap @private (Printable)
 {
@@ -9,7 +9,6 @@ struct IndexMap @private (Printable)
 	uint freq;
 }
 fn bool IndexMap.less(&self, IndexMap other) => self.freq < other.freq;
-fn usz? IndexMap.to_format(&self, Formatter *f) @dynamic => f.printf("(%d)", self.freq);
 
 <*
  Compute length-limited prefix code lengths based on Larmore/Hirschberg's
