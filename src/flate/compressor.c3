@@ -107,6 +107,28 @@ fn void? HuffCompressor.write_dynamic_header(&self, bool final = true) => @pool(
 	}
 }
 
+fn void? HuffCompressor.build_fixed_trees(&self)
+{
+	self.lt = huff::make_tree_from_lengths({
+		[  0..143] = 8,
+		[144..255] = 9,
+		[256..279] = 7,
+		[280..287] = 8,
+	})!;
+	self.dt = huff::make_tree_from_lengths({
+		[0..31] = 5,
+	})!;
+}
+
+fn void? HuffCompressor.write_fixed_header(&self, bool final = true) => @pool()
+{
+	// Write fixed block header.
+	// Push BFINAL (0b1 or 0b0) and BTYPE (0b01).
+	self.stream.write(final ? 1 : 0, 1);
+	self.stream.write(0b01, 2);
+}
+
+
 fn void? HuffCompressor.write_compressed_data(&self, Token[] tokens)
 {
 	foreach (token: tokens)

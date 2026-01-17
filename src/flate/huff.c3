@@ -22,8 +22,19 @@ struct HuffTree
 *>
 fn HuffTree? make_tree(uint[] freqs, uint max_bits = MAX_BITS) => @pool()
 {
+	char[] codelen = pkgmerge::codelen(tmem, freqs, max_bits);
+	return make_tree_from_lengths(codelen);
+}
+
+<*
+ Make a Huffman tree from code lengths.
+
+ @require codelen.len <= 288 : "Cannot be larger than 288"
+*>
+fn HuffTree? make_tree_from_lengths(char[] codelen)
+{
 	HuffTree h;
-	h.blen[:freqs.len] = pkgmerge::codelen(tmem, freqs, max_bits)[..];
+	h.blen[:codelen.len] = codelen[..];
 	h.max_sym = codegen(&h.codes, &h.blen)!;
 	return h;
 }
