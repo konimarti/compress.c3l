@@ -248,23 +248,9 @@ fn char[] construct(Allocator allocator, Token[] tokens) => @pool()
 	return buf.copy_str(allocator);
 }
 
-fn void test_lz77() @test => @pool()
-{
-	String[] tests = {
-		"aaa aaaa aaaa",
- 		"hello world world hello"
-	};
-	foreach (s: tests)
-	{
-		Token[] tokens = tokenize(tmem, s);
-		String r = (String)construct(tmem, tokens);
-		assert(r == s, "got: %s, want: %s", r, s);
-	}
-}
+module compress::flate::lz77_test_data @private;
 
-fn void test_lz77_long_text() @test => @pool()
-{
-	String text = `
+String long_text = `
 {
   "provides" : "compress",
   "sources" : [ "src/**" ],
@@ -400,7 +386,39 @@ fn void test_lz77_long_text() @test => @pool()
   }
 }
 	`;
-	Token[] tokens = tokenize(tmem, text);
-	String r = (String)construct(tmem, tokens);
+
+module compress::flate::lz77_bench @benchmark;
+import compress::flate::lz77;
+import compress::flate::lz77_test_data @public;
+
+fn void bench_lz77_long_text() => @pool()
+{
+	String text = lz77_test_data::long_text;
+	Token[] tokens = lz77::tokenize(tmem, text);
+}
+
+module compress::flate::lz77_test @test;
+import compress::flate::lz77;
+import compress::flate::lz77_test_data @public;
+
+fn void test_lz77() => @pool()
+{
+	String[] tests = {
+		"aaa aaaa aaaa",
+ 		"hello world world hello"
+	};
+	foreach (s: tests)
+	{
+		Token[] tokens = lz77::tokenize(tmem, s);
+		String r = (String)lz77::construct(tmem, tokens);
+		assert(r == s, "got: %s, want: %s", r, s);
+	}
+}
+
+fn void test_lz77_long_text() => @pool()
+{
+	String text = lz77_test_data::long_text;
+	Token[] tokens = lz77::tokenize(tmem, text);
+	String r = (String)lz77::construct(tmem, tokens);
 	test::eq(r, text);
 }
