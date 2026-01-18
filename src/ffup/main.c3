@@ -11,12 +11,13 @@ fn void usage()
 
 	Writes the deflated data of a file (or from stdin) in hex to stdout.
 
-	ffup [-f <file>] [ -n | -d | -x ]
+	ffup [-f <file>] [ -n | -d | -i ]
 
 	-f <file>       File to deflate. If not set, read from stdin.
 	-n              Non-compressed blocks.
 	-d              Use dynamic Huffman codes.
-	-x              Use fixed Huffman codes.
+	-i              Use fixed Huffman codes.
+	-x              Hexdump compressed data.
 
 	Example usage: ffup -df main.c3 | xxd -r -p | puff -w
 
@@ -32,9 +33,10 @@ enum CompressMethod
 
 fn void main(String[] args) => @pool()
 {
+	bool hex = false;
 	CompressMethod m = FIXED;
 	String f;
-	if (try opts = getopt::getopts(tmem, args, "ndxf:"))
+	if (try opts = getopt::getopts(tmem, args, "ndixf:"))
 	{
 		foreach (opt: opts)
 		{
@@ -42,7 +44,8 @@ fn void main(String[] args) => @pool()
 			{
 				case 'n': m = CompressMethod.NONCOMP;
 				case 'd': m = CompressMethod.DYNAMIC;
-				case 'x': m = CompressMethod.FIXED;
+				case 'i': m = CompressMethod.FIXED;
+				case 'x': hex = true;
 				case 'f': f = opt.arg;
 			}
 		}
@@ -56,13 +59,24 @@ fn void main(String[] args) => @pool()
 	char[] bytes, out;
 	InStream reader = f.len ? &&file::open(f, "rb+")!! : io::stdin();
 	bytes = io::read_fully(tmem, reader)!!;
+
+	Clock t = clock::now();
 	switch (m)
 	{
 		case NONCOMP: out = flate::deflate_non_compressed_blocks(tmem, bytes)!!;
 		case DYNAMIC: out = flate::deflate_dynamic_block(tmem, bytes)!!;
 		case FIXED  : out = flate::deflate_fixed_block(tmem, bytes)!!;
 	}
-	io::printfn("%s", hex::tencode(out));
+	NanoDuration d = t.mark();
+
+
+	if (bytes.len)
+	{
+		io::eprintfn("Original size: %d, Compressed: %d", bytes.len, out.len);
+		io::eprintfn("Compression ratio: %g %%", 100.0*out.len/bytes.len);
+		io::eprintfn("Throughput: %.2f MB/sec", bytes.len/(double)d * 1000.0);
+	}
+	if (hex) io::printfn("%s", hex::tencode(out));
 }
 
 
