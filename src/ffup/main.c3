@@ -67,14 +67,14 @@ fn void main(String[] args) => @pool()
 		case DYNAMIC: out = flate::deflate_dynamic_block(tmem, bytes)!!;
 		case FIXED  : out = flate::deflate_fixed_block(tmem, bytes)!!;
 	}
-	NanoDuration d = t.mark();
-
+	NanoDuration elapsed = t.mark();
 
 	if (bytes.len)
 	{
-		io::eprintfn("Original size: %d, Compressed: %d", bytes.len, out.len);
+		io::eprintfn("Elapsed time: %s", elapsed);
+		io::eprintfn("Size: %d bytes, Compressed: %d bytes", bytes.len, out.len);
 		io::eprintfn("Compression ratio: %g %%", 100.0*out.len/bytes.len);
-		io::eprintfn("Throughput: %.2f MB/sec", bytes.len/(double)d * 1000.0);
+		io::eprintfn("Throughput: %.1f MB/sec", bytes.len/(double)elapsed * 1000.0);
 	}
 	if (hex) io::printfn("%s", hex::tencode(out));
 }
