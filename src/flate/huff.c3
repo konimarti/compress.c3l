@@ -16,14 +16,14 @@ struct HuffTree
 }
 
 <*
- Make a Huffman tree from symbol frequencies.
+ Gernate a Huffman tree from symbol frequencies.
 
  @require freqs.len <= 288 : "Cannot be larger than 288"
 *>
-fn HuffTree? make_tree(uint[] freqs, uint max_bits = MAX_BITS) => @pool()
+fn HuffTree? generate(uint[] freqs, uint max_bits = MAX_BITS) => @pool()
 {
 	char[] codelen = pkgmerge::codelen(tmem, freqs, max_bits);
-	return make_tree_from_lengths(codelen);
+	return generate_from_lengths(codelen);
 }
 
 <*
@@ -31,11 +31,11 @@ fn HuffTree? make_tree(uint[] freqs, uint max_bits = MAX_BITS) => @pool()
 
  @require codelen.len <= 288 : "Cannot be larger than 288"
 *>
-fn HuffTree? make_tree_from_lengths(char[] codelen)
+fn HuffTree? generate_from_lengths(char[] codelen)
 {
 	HuffTree h;
 	h.blen[:codelen.len] = codelen[..];
-	h.max_sym = codegen(&h.codes, &h.blen)!;
+	h.max_sym = canonical_codes(&h.codes, &h.blen)!;
 	return h;
 }
 
@@ -46,7 +46,7 @@ fn HuffTree? make_tree_from_lengths(char[] codelen)
  @param [in] blen   : "Bit lengths for Huffman codes"
  @return "Max symbol for generated Huffman codes."
 *>
-fn int? codegen(uint[] codes, char[] blen)
+fn int? canonical_codes(uint[] codes, char[] blen)
 {
 	uint[16] bl_count, next_code;
 	int max_sym = -1;
@@ -83,6 +83,6 @@ fn void test_huff_codegen() @test
 	char[4] blen = { 2, 1, 3, 3 };
 	uint[4] want= { 0b01, 0b0, 0b011, 0b111 };
 	uint[4] codes;
-	assert(codegen(&codes, &blen)!! == 3);
+	assert(canonical_codes(&codes, &blen)!! == 3);
 	assert(codes == want);
 }
