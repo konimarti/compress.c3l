@@ -78,8 +78,11 @@ fn void BitStream.fill(&self)
 }
 
 <*
- Flush the internal bit stream buffer and copies the data to Type[].
- Only flush chunks of data filled to BITS.
+ Flush the internal bit stream buffer and return the data as a Type[].
+ Unfinished elements are only flushed if fill is true.
+
+ @param allocator : "Allocate returned Type[]"
+ @param fill      : "Fill up unfinished elements befure flushing"
 *>
 fn Type[]? BitStream.flush(&self, Allocator allocator, bool fill = false)
 {
@@ -91,10 +94,7 @@ fn Type[]? BitStream.flush(&self, Allocator allocator, bool fill = false)
 	Type last = self.list[^1];
 	self.bitpos -= BITS * len;
 	self.list.clear();
-	if (!fill && q > 0)
-	{
-		self.list.push(last);
-	}
+	if (!fill && q > 0) self.list.push(last);
 	return array;
 }
 
