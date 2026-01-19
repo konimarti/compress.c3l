@@ -5,7 +5,7 @@ import std::io, std::collections;
 
 const ushort MIN_MATCH_LEN   = 3;
 const ushort MAX_MATCH_LEN   = 256;
-const uint   MAX_WINDOW_SIZE = 1 << 15 - 1;
+const uint   MAX_WINDOW_SIZE = 1 << 15;
 const uint   MIN_OFFSET_LEN  = 3;
 
 enum TokenType : inline char

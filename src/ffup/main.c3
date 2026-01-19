@@ -26,7 +26,7 @@ fn void usage()
 
 enum CompressMethod
 {
-	NONCOMP,
+	STORE,
 	DYNAMIC,
 	FIXED
 }
@@ -42,7 +42,7 @@ fn void main(String[] args) => @pool()
 		{
 			switch (opt.flag)
 			{
-				case 'n': m = CompressMethod.NONCOMP;
+				case 's': m = CompressMethod.STORE;
 				case 'd': m = CompressMethod.DYNAMIC;
 				case 'i': m = CompressMethod.FIXED;
 				case 'x': hex = true;
@@ -63,7 +63,7 @@ fn void main(String[] args) => @pool()
 	Clock t = clock::now();
 	switch (m)
 	{
-		case NONCOMP: out = flate::deflate_non_compressed_blocks(tmem, bytes)!!;
+		case STORE  : out = flate::deflate_non_compressed_blocks(tmem, bytes)!!;
 		case DYNAMIC: out = flate::deflate_dynamic_block(tmem, bytes)!!;
 		case FIXED  : out = flate::deflate_fixed_block(tmem, bytes)!!;
 	}
@@ -71,10 +71,9 @@ fn void main(String[] args) => @pool()
 
 	if (bytes.len)
 	{
-		io::eprintfn("Elapsed time: %s", elapsed);
 		io::eprintfn("Size: %d bytes, Compressed: %d bytes", bytes.len, out.len);
 		io::eprintfn("Compression ratio: %g %%", 100.0*out.len/bytes.len);
-		io::eprintfn("Throughput: %.1f MB/sec", bytes.len/(double)elapsed * 1000.0);
+		io::eprintfn("%3.1f MB/sec throughput (elapsed time: %s)", bytes.len/(double)elapsed * 1000.0, elapsed);
 	}
 	if (hex) io::printfn("%s", hex::tencode(out));
 }
