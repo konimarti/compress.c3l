@@ -28,12 +28,19 @@ fn void? HuffCompressor.build_trees(&self, Token[] tokens)
 		switch (token.type)
 		{
 			case LITERAL:
+				// Overflow check.
+				if (lt_freqs[token.lit] == uint.max) continue;
 				lt_freqs[token.lit]++;
+
 			case MATCH:
 				i = huff_index_lookup(&len_base, token.length());
+				if (lt_freqs[257+i] == uint.max) continue;
 				lt_freqs[257+i]++;
+
 				i = huff_index_lookup(&dist_base, token.offset());
+				if (dt_freqs[i] == uint.max) continue;
 				dt_freqs[i]++;
+
 			default:
 				unreachable("invalid token encountered");
 		}
@@ -116,7 +123,7 @@ fn char[] encode_code_lengths(Allocator allocator, char[] seq) @private => @pool
 
 		// Count repetitions of length len.
 		r = 1;
-		while (i+r < seq.len && seq[(usz)(i+r)] == sym) r++;
+		while (i+r < seq.len && seq[i+r] == sym) r++;
 		switch
 		{
 			case (sym != 0 && r <= 3) || (sym == 0 && r < 3):
@@ -130,7 +137,7 @@ fn char[] encode_code_lengths(Allocator allocator, char[] seq) @private => @pool
 				{
 					rem = r > 6 ? 6 : r;
 					enc.push(16);
-					enc.push((char)rem - 3);
+					enc.push((char)rem-3);
 					r -= rem;
 					i += rem;
 				}
@@ -143,7 +150,7 @@ fn char[] encode_code_lengths(Allocator allocator, char[] seq) @private => @pool
 				{
 					rem = r > 138 ? 138 : r;
 					enc.push(18);
-					enc.push((char)rem - 11);
+					enc.push((char)rem-11);
 					r -= rem;
 					i += rem;
 				}
@@ -164,59 +171,59 @@ fn void test_encode_code_lengths() @test => @pool()
 	CodeLengthTestCase[*] tests = {
 		{
 			.input = {1,2,3,4},
-			.want = {1,2,3,4},
+			.want  = {1,2,3,4},
 		},
 		{
 			.input = {1,1},
-			.want = {1,1},
+			.want  = {1,1},
 		},
 		{
 			.input = {1,1,1},
-			.want = {1,1,1},
+			.want  = {1,1,1},
 		},
 		{
 			.input = {1,1,1,1},
-			.want = {1,16,0},
+			.want  = {1,16,0},
 		},
 		{
 			.input = {1,1,1,1,1,1,1},
-			.want = {1,16,3},
+			.want  = {1,16,3},
 		},
 		{
 			.input = {1,1,1,1,1,1,1,1},
-			.want = {1,16,3,1},
+			.want  = {1,16,3,1},
 		},
 		{
 			.input = {0,0},
-			.want = {0,0},
+			.want  = {0,0},
 		},
 		{
 			.input = {0,0,0},
-			.want = {17,0},
+			.want  = {17,0},
 		},
 		{
 			.input = {0,0,0,0,0},
-			.want = {17,2},
+			.want  = {17,2},
 		},
 		{
 			.input = {[9]=0},
-			.want = {17,7},
+			.want  = {17,7},
 		},
 		{
 			.input = {[10]=0},
-			.want = {18,0},
+			.want  = {18,0},
 		},
 		{
 			.input = {[11]=0},
-			.want = {18,1},
+			.want  = {18,1},
 		},
 		{
 			.input = {[137]=0},
-			.want = {18,127},
+			.want  = {18,127},
 		},
 		{
 			.input = {[138]=0},
-			.want = {18,127,0},
+			.want  = {18,127,0},
 		},
 	};
 
@@ -337,7 +344,7 @@ fn void HuffCompressor.write_end_of_block(&self) @inline
 	self.write_literal(END_OF_BLOCK);
 }
 
-fn void HuffCompressor.write_match(&self, ushort len, uint dist)
+fn void HuffCompressor.write_match(&self, uint len, uint dist)
 {
 	usz i;
 
