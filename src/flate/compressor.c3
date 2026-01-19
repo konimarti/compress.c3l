@@ -50,215 +50,204 @@ fn void? HuffCompressor.build_trees(&self, Token[] tokens)
 
 }
 
-// TODO: Clean up entire code length encoding code.
-struct CodeLength
-{
-	char len;   // Code lengths [0..18]
-	char extra; // Extra bits (depening on code length code)
-}
-alias CodeLengthList = List{CodeLength};
-
 struct CodeLengthEncoder
 {
-	CodeLength[] enc;
+	Allocator allocator;
+	char[] enc;
 	HuffTree ct;
 	int max_sym;
 }
 
-fn void? CodeLengthEncoder.init(&self, Allocator allocator, char[] lt_len, char[] dt_len) => @pool()
+fn void CodeLengthEncoder.init(&self, Allocator allocator)
+{
+	*self = { .allocator = allocator, .ct = {}, .max_sym = -1 };
+}
+
+fn void CodeLengthEncoder.free(&self)
+{
+	if (self.enc.len) allocator::free(self.allocator, self.enc);
+}
+
+<*
+ Encode literal/length and distance bit lengths and return a Huffman tree.
+*>
+fn void? CodeLengthEncoder.encode(&self, char[] lt_len, char[] dt_len)
 {
 	usz i, n;
-	char[] seq;
+	char sym;
+	uint[19] freqs;
 
-	// Combine literal/length and distance code lengths.
 	n = lt_len.len + dt_len.len;
-	seq = mem::temp_array(char, n);
-	foreach (len: lt_len) seq[i++] = len;
-	foreach (len: dt_len) seq[i++] = len;
 
-	// Encode the code lengths.
-	CodeLengthList enc;
-	enc.tinit(); // Allocate a bit more than necessary
-	encode_code_lengths(&enc, seq);
-	self.enc = enc.to_array(allocator);
+	@pool()
+	{
+		// Combine literal/length and distance code lengths.
+		char[] lengths = mem::temp_array(char, n);
+		foreach (s: lt_len) lengths[i++] = s;
+		foreach (s: dt_len) lengths[i++] = s;
+
+		// Encode the code lengths.
+		self.enc = encode_code_lengths(self.allocator, lengths);
+	};
 
 	// Calculate frequencies of the encoded code lengths.
 	self.max_sym = -1;
-	uint[19] freqs;
-	foreach (cl: self.enc)
+	i = 0;
+	while (i < self.enc.len)
 	{
-		assert(cl.len < 19);
-		freqs[cl.len]++;
-		if (hc_order[cl.len] > self.max_sym)
-		{
-			self.max_sym = hc_order[cl.len];
-		}
+		sym = self.enc[i++];
+		if (sym > 15) i++; // Skip extra bits for symbols 16,17,18
+		if (hc_order[sym] > self.max_sym) self.max_sym = hc_order[sym];
+		freqs[sym]++;
 	}
+
 	assert(self.max_sym >= 0);
 
-	// Create code length codes.
 	self.ct = huff::make_tree(freqs[..], 5)!;
 }
 
-fn void encode_code_lengths(CodeLengthList *cl, char[] seq)
+fn char[] encode_code_lengths(Allocator allocator, char[] seq) @private => @pool()
 {
-	usz r, rem;
-	for (usz i = 0; i < seq.len;)
+	List{char} enc;
+	enc.tinit(seq.len); // Allocate a bit more than necessary
+
+	usz i, r, rem;
+	while (i < seq.len)
 	{
-		assert(seq[i] < huff::MAX_BITS);
-		char len = seq[i];
+		char sym = seq[i]; // Code length symbol.
+		assert(sym < huff::MAX_BITS);
 
 		// Count repetitions of length len.
 		r = 1;
-		while (i+r < seq.len && seq[(usz)(i+r)] == len) r++;
-
-		if (len == 0)
+		while (i+r < seq.len && seq[(usz)(i+r)] == sym) r++;
+		switch
 		{
-			// Encode code length 0 with r repetitions.
-			switch
-			{
-				case r < 3:
-					while (r--)
-					{
-						cl.push({len, 0});
-						i++;
-					}
-				case r >= 3 && r < 11:
-					cl.push({17, (char)r - 3});
-					i += r;
-				case r >= 11:
-					while (r > 10)
-					{
-						rem = r > 138 ? 138 : r;
-						cl.push({18, (char)rem - 11});
-						r -= rem;
-						i += rem;
-					}
-			}
-		}
-		else
-		{
-			// Encode code length != 0 with r repetitions.
-			if (r > 3)
-			{
-				// Emit code length.
-				cl.push({len, 0});
+			case (sym != 0 && r <= 3) || (sym == 0 && r < 3):
+				rem = r;
+				while (rem--) enc.push(sym);
+				i += r;
+			case sym != 0 && r > 3:
+				enc.push(sym);
 				i++; r--;
-
-				// Emit code 16.
 				while (r > 2)
 				{
 					rem = r > 6 ? 6 : r;
-					cl.push({16, (char)rem - 3});
+					enc.push(16);
+					enc.push((char)rem - 3);
 					r -= rem;
 					i += rem;
 				}
-			}
-			else
-			{
-				// Emit code lengths.
-				while (r--)
+			case sym == 0 && r >= 3 && r < 11:
+				enc.push(17);
+				enc.push((char)r-3);
+				i += r;
+			case sym == 0 && r >= 11:
+				while (r > 10)
 				{
-					cl.push({len, 0});
-					i++;
+					rem = r > 138 ? 138 : r;
+					enc.push(18);
+					enc.push((char)rem - 11);
+					r -= rem;
+					i += rem;
 				}
-			}
+			default: unreachable("internal error");
 		}
 	}
+	return enc.to_array(allocator);
 }
 
-struct CodeLengthTestCase
+struct CodeLengthTestCase @private
 {
 	char[] input;
-	CodeLength[] want;
+	char[] want;
 }
 
-fn void test_code_length_encoding() @test => @pool()
+fn void test_encode_code_lengths() @test => @pool()
 {
 	CodeLengthTestCase[*] tests = {
 		{
 			.input = {1,2,3,4},
-			.want = {{1,0},{2,0},{3,0},{4,0}},
+			.want = {1,2,3,4},
 		},
 		{
 			.input = {1,1},
-			.want = {{1,0},{1,0}},
+			.want = {1,1},
 		},
 		{
 			.input = {1,1,1},
-			.want = {{1,0},{1,0},{1,0}},
+			.want = {1,1,1},
 		},
 		{
 			.input = {1,1,1,1},
-			.want = {{1,0},{16,0}},
+			.want = {1,16,0},
 		},
 		{
 			.input = {1,1,1,1,1,1,1},
-			.want = {{1,0},{16,3}},
+			.want = {1,16,3},
 		},
 		{
 			.input = {1,1,1,1,1,1,1,1},
-			.want = {{1,0},{16,3},{1,0}},
+			.want = {1,16,3,1},
 		},
 		{
 			.input = {0,0},
-			.want = {{0,0},{0,0}},
+			.want = {0,0},
 		},
 		{
 			.input = {0,0,0},
-			.want = {{17,0}},
+			.want = {17,0},
 		},
 		{
 			.input = {0,0,0,0,0},
-			.want = {{17,2}},
+			.want = {17,2},
 		},
 		{
 			.input = {[9]=0},
-			.want = {{17,7}},
+			.want = {17,7},
 		},
 		{
 			.input = {[10]=0},
-			.want = {{18,0}},
+			.want = {18,0},
 		},
 		{
 			.input = {[11]=0},
-			.want = {{18,1}},
+			.want = {18,1},
 		},
 		{
 			.input = {[137]=0},
-			.want = {{18,127}},
+			.want = {18,127},
 		},
 		{
 			.input = {[138]=0},
-			.want = {{18,127},{0,0}},
+			.want = {18,127,0},
 		},
 	};
 
 	foreach (j, test: tests)
 	{
-		CodeLengthList enc;
-		encode_code_lengths(&enc, test.input);
-		test::eq(enc.len(), test.want.len);
+		char[] enc = encode_code_lengths(tmem, test.input);
+		test::eq(enc.len, test.want.len);
 		foreach (i, got: enc)
 		{
-			test::eq(got.len, test.want[i].len);
-			test::eq(got.extra, test.want[i].extra);
+			test::eq(got, test.want[i]);
 		}
 	}
 }
 
-
 fn void? HuffCompressor.write_dynamic_header(&self, bool final = true) => @pool()
 {
+	char sym;
 	uint i, hlit, hdist, hclen;
 
 	hlit = (self.lt.max_sym < 257) ? 0 : self.lt.max_sym + 1 - 257;
 	hdist = self.dt.max_sym;
 
-	// Create run-length codes.
-	CodeLengthEncoder cle;
-	cle.init(tmem, self.lt.blen[:hlit+257], self.dt.blen[:hdist+1])!;
-	hclen = cle.max_sym + 1 - 4;
+	// Create run-length encoder.
+	CodeLengthEncoder encoder;
+	encoder.init(tmem);
+	encoder.encode(self.lt.blen[:hlit+257], self.dt.blen[:hdist+1])!;
+
+	hclen = encoder.max_sym + 1 - 4;
 
 	// Write dynamic block header.
 	// Push BFINAL (0b1 or 0b0) and BTYPE (0b10).
@@ -279,18 +268,19 @@ fn void? HuffCompressor.write_dynamic_header(&self, bool final = true) => @pool(
 
 	for (i = 0; i < hclen + 4; i++)
 	{
-		self.stream.write(cle.ct.blen[hc_order[i]], 3);
+		self.stream.write(encoder.ct.blen[hc_order[i]], 3);
 	}
 
 	// Write encoded code length.
-	foreach (c: cle.enc)
+	for (i = 0; i < encoder.enc.len; )
 	{
-		self.stream.write(cle.ct.codes[c.len], cle.ct.blen[c.len]);
-		switch (c.len)
+		sym = encoder.enc[i++];
+		self.stream.write(encoder.ct.codes[sym], encoder.ct.blen[sym]);
+		switch (sym)
 		{
-			case 16: self.stream.write(c.extra, 2);
-			case 17: self.stream.write(c.extra, 3);
-			case 18: self.stream.write(c.extra, 7);
+			case 16: self.stream.write(encoder.enc[i++], 2);
+			case 17: self.stream.write(encoder.enc[i++], 3);
+			case 18: self.stream.write(encoder.enc[i++], 7);
 		}
 	}
 
