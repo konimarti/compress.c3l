@@ -7,7 +7,7 @@ const END_OF_BLOCK = 256;
 
 struct HuffCompressor
 {
-	BitStream{char} stream;
+	BitWriter{char} stream;
 	HuffTree lt; // Literal/Length tree
 	HuffTree dt; // Distance tree
 }
