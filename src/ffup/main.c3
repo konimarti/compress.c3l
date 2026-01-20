@@ -24,17 +24,10 @@ fn void usage()
 	`);
 }
 
-enum CompressMethod
-{
-	STORE,
-	DYNAMIC,
-	FIXED
-}
-
 fn void main(String[] args) => @pool()
 {
 	bool hex = false;
-	CompressMethod m = FIXED;
+	DeflateBlockFn deflate = &flate::dynamic_block;
 	String f;
 	if (try opts = getopt::getopts(tmem, args, "ndixf:"))
 	{
@@ -42,9 +35,9 @@ fn void main(String[] args) => @pool()
 		{
 			switch (opt.flag)
 			{
-				case 's': m = CompressMethod.STORE;
-				case 'd': m = CompressMethod.DYNAMIC;
-				case 'i': m = CompressMethod.FIXED;
+				case 's': deflate = &flate::store_block;
+				case 'd': deflate = &flate::dynamic_block;
+				case 'i': deflate = &flate::fixed_block;
 				case 'x': hex = true;
 				case 'f': f = opt.arg;
 			}
@@ -61,12 +54,7 @@ fn void main(String[] args) => @pool()
 	bytes = io::read_fully(tmem, reader)!!;
 
 	Clock t = clock::now();
-	switch (m)
-	{
-		case STORE  : out = flate::deflate_non_compressed_blocks(tmem, bytes)!!;
-		case DYNAMIC: out = flate::deflate_dynamic_block(tmem, bytes)!!;
-		case FIXED  : out = flate::deflate_fixed_block(tmem, bytes)!!;
-	}
+	out = flate::deflate(tmem, bytes, deflate)!!;
 	NanoDuration elapsed = t.mark();
 
 	if (bytes.len)

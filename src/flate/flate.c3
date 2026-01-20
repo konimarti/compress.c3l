@@ -6,9 +6,9 @@ fn char[]? compress(Allocator allocator, char[] bytes)
 {
 	if (bytes.len < 32)
 	{
-		return deflate_non_compressed_blocks(allocator, bytes);
+		return deflate(allocator, bytes, &store_block);
 	}
-	return deflate_dynamic_block(allocator, bytes);
+	return deflate(allocator, bytes, &dynamic_block, 1<<16);
 }
 fn char[]? tcompress(char[] bytes) @inline => compress(tmem, bytes);
 
@@ -20,109 +20,135 @@ fn char[]? tuncompress(char[] bytes) @inline => uncompress(tmem, bytes);
 
 const MAX_BLOCK_SIZE = 65_535;
 
-<*
- Return bytes as non-compressed blocks (BTYPE=00) in a valid deflate format.
- Chunk input data into multiple blocks of MAX_BLOCK_SIZE bytes.
+alias DeflateBlockFn = fn void?(HuffCompressor *c, char[] bytes, bool final);
 
- See RFC 1951 Section 3.2.4
+<*
+ Compresses the given input using the DEFLATE algorithm (RFC 1951).
+
+ The input is processed in one or more consecutive blocks. For each block,
+ this function calls the user‑supplied `deflate_block` callback, which is
+ responsible for:
+   - performing LZ77 tokenization,
+   - emitting one (or more) DEFLATE blocks into the compressor stream, and
+   - setting the BFINAL flag on the last block when `final == true`.
+
+ The callback is expected to append encoded DEFLATE data to the provided
+ `HuffCompressor` and may emit one or more DEFLATE blocks per call. The `final`
+ argument indicates whether this call must produce the final DEFLATE block of
+ the stream.
+
+ The DEFLATE bitstream is accumulated in the compressor and finally flushed
+ into an allocated buffer that is returned to the caller. The caller is
+ responsible for freeing this buffer.
+
+ Notes:
+   - The `HuffCompressor` instance is initialized once and reused across all
+     blocks so that streaming use cases and a continuous LZ77 history window
+     could be supported.
+
+ @param [&inout] allocator: "Allocator for compressed data."
+ @param [in] bytes:         "Input data to be compressed."
+ @param deflate_block:      "Callback invoked for each logical input block."
+ @param max_block_len:      "Maximum number of input bytes to pass to `deflate_block`."
+
+ @return "A newly allocated char[] containing the complete DEFLATE stream."
+
 *>
-fn char[]? deflate_non_compressed_blocks(Allocator allocator, char[] bytes) => @pool()
+fn char[]? deflate(Allocator allocator, char[] bytes,
+	DeflateBlockFn deflate_block = &dynamic_block,
+	usz max_block_len = MAX_BLOCK_SIZE) => @pool()
 {
 	bool final;
-	uint offset, remaining, block_len;
+	usz offset, remaining, block_len;
 
-	BitStream{char} stream;
-	stream.tinit();
+	HuffCompressor c;
+	c.init(tmem);
 
 	offset = 0;
 	while (offset < bytes.len)
 	{
 		remaining = bytes.len - offset;
-		block_len = remaining > MAX_BLOCK_SIZE ? MAX_BLOCK_SIZE : remaining;
-		final = (offset + block_len) >= (uint)bytes.len;
-
-		deflate_non_compressed_block(&stream, final, block_len,
-			bytes[offset:block_len])!;
-
+		block_len = remaining > max_block_len ? max_block_len : remaining;
+		final = (offset + block_len) >= bytes.len;
+		deflate_block(&c, bytes[offset:block_len], final)!;
 		offset += block_len;
 	}
 
-	return stream.flush(allocator, true)!;
+	return c.stream.flush(allocator, true)!;
 }
 
-fn void? deflate_non_compressed_block(BitStream{char} *stream, bool final,
-	uint block_len, char[] bytes)
+<*
+ Store data uncompressed.
+ See RFC 1951 Section 3.2.4
+*>
+fn void? store_block(HuffCompressor *c, char[] bytes, bool final)
 {
+	uint n = (uint)bytes.len;
+
 	// Set non-compressed block header: Either BFINAL (0b1 or 0b0)
 	// and BTYPE (0b00) for non-compressed blocks.
-	stream.write(final ? 1 : 0, 8);
+	c.stream.write(final ? 1 : 0, 8);
 
 	// Set block length.
-	stream.write(block_len, 16);
-	stream.write(~block_len, 16);
+	c.stream.write(n, 16);
+	c.stream.write(~n, 16);
 
 	// Write uncompressed bytes.
-	for (usz i = 0; i < block_len; i++)
+	for (usz i = 0; i < n; i++)
 	{
-		stream.write(bytes[i], 8);
+		c.stream.write(bytes[i], 8);
 	}
 }
 
 <*
  Compression with dynamic Huffman codes.
- See RFC 1951 Section 3.2.4
+ See RFC 1951 Section 3.2.7
 *>
-fn char[]? deflate_dynamic_block(Allocator allocator, char[] bytes) => @pool()
+fn void? dynamic_block(HuffCompressor *c, char[] bytes, bool final) => @pool()
 {
 	Token[] tokens = lz77::tokenize(tmem, bytes);
-	HuffCompressor c;
-	c.init(tmem);
 	c.build_trees(tokens)!;
 	c.write_dynamic_header()!;
 	c.write_compressed_data(tokens)!;
 	c.write_end_of_block();
-	return c.stream.flush(allocator, true)!;
 }
 
 <*
  Compression with fixed Huffman codes.
  See RFC 1951 Section 3.2.6
 *>
-fn char[]? deflate_fixed_block(Allocator allocator, char[] bytes) => @pool()
+fn void? fixed_block(HuffCompressor *c, char[] bytes, bool final) => @pool()
 {
 	Token[] tokens = lz77::tokenize(tmem, bytes);
-	HuffCompressor c;
-	c.init(tmem);
 	c.build_fixed_trees()!;
 	c.write_fixed_header()!;
 	c.write_compressed_data(tokens)!;
 	c.write_end_of_block();
-	return c.stream.flush(allocator, true)!;
 }
 
 module compress::deflate::test @test;
 import compress::flate;
 
-fn void test_deflate_dynamic_block() => @pool()
+fn void test_deflate_dynamic() => @pool()
 {
 	char[] bytes = "hello world world hello";
-	char[] comp = flate::deflate_dynamic_block(tmem, bytes)!!;
+	char[] comp = flate::deflate(tmem, bytes, &flate::dynamic_block)!!;
 	char[] want = x`2de8b1090000080341ace2700a160f011bd70f88cd15d7058ad590ef8d01`;
 	assert(comp == want);
 }
 
-fn void test_deflate_fixed_block() => @pool()
+fn void test_deflate_fixed() => @pool()
 {
 	char[] bytes = "hello world world hello";
-	char[] fixed = flate::deflate_fixed_block(tmem, bytes)!!;
+	char[] fixed = flate::deflate(tmem, bytes, &flate::fixed_block)!!;
 	char[] want = x`cb48cdc9c95728cf2fca498192601100`;
 	assert(fixed == want);
 }
 
-fn void test_deflate_non_compressed_blocks() => @pool()
+fn void test_deflate_store() => @pool()
 {
 	char[] bytes = "hello world";
-	char[] non_comp = flate::deflate_non_compressed_blocks(tmem, bytes)!!;
+	char[] non_comp = flate::deflate(tmem, bytes, &flate::store_block)!!;
 	assert(non_comp.len == 1 + 2 + 2 + bytes.len);
 	assert(non_comp[0] == 1);
 	assert(non_comp[5..] == bytes[..]);
