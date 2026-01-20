@@ -106,6 +106,16 @@ fn void BitReader.tinit(&self, Type[] values) => self.init(tmem, values);
 fn void BitReader.push(&self, Type value) => self.list.push(value);
 fn void BitReader.push_all(&self, Type[] value) => self.list.push_all(value);
 
+faultdef NOT_PERMITTED;
+fn Type? BitReader.pop_first(&self)
+{
+	if (self.bitpos == 0)
+	{
+		return self.list.pop_first();
+	}
+	return NOT_PERMITTED?;
+}
+
 <*
  @param num_bits         : "Number of bits to read"
  @require num_bits >= 1  : "Number of bits must be at least 1"

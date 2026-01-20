@@ -2,7 +2,7 @@
 // Use of this source code is governed by the MIT license.
 module compress::flate;
 
-fn char[]? compress(Allocator allocator, char[] bytes)
+fn char[]? compress(Allocator allocator, char[] bytes) @inline
 {
 	if (bytes.len < 32)
 	{
@@ -11,12 +11,38 @@ fn char[]? compress(Allocator allocator, char[] bytes)
 	return deflate(allocator, bytes, &dynamic_block, 1<<16);
 }
 fn char[]? tcompress(char[] bytes) @inline => compress(tmem, bytes);
+fn char[]? uncompress(Allocator allocator, char[] bytes) @inline => inflate(allocator, bytes);
+fn char[]? tuncompress(char[] bytes) @inline => inflate(tmem, bytes);
 
-fn char[]? uncompress(Allocator allocator, char[] bytes)
+faultdef INVALID_BLOCK_TYPE;
+import std;
+<*
+@return? INVALID_BLOCK_TYPE
+*>
+fn char[]? inflate(Allocator allocator, char[] bytes) => @pool()
 {
-	unreachable("To be implemented soon.");
+	HuffDecompressor d;
+	d.init(tmem, bytes);
+
+	uint final, type;
+	while (!final)
+	{
+		final = d.getbits(1)!;
+		type = d.getbits(2)!;
+
+		io::printfn("bfinal=%d", final);
+		io::printfn("btype=%d", type);
+
+		switch(type)
+		{
+			case 0: d.store_block()!;
+			case 1: d.fixed_block()!;
+			case 2: d.dynamic_block()!;
+			default: return INVALID_BLOCK_TYPE?;
+		}
+	}
+	return d.out.to_array(allocator);
 }
-fn char[]? tuncompress(char[] bytes) @inline => uncompress(tmem, bytes);
 
 const MAX_BLOCK_SIZE = 65_535;
 
@@ -137,20 +163,26 @@ fn void test_deflate_dynamic() => @pool()
 	assert(comp == want);
 }
 
-fn void test_deflate_fixed() => @pool()
+fn void test_flate_fixed() => @pool()
 {
 	char[] bytes = "hello world world hello";
 	char[] fixed = flate::deflate(tmem, bytes, &flate::fixed_block)!!;
 	char[] want = x`cb48cdc9c95728cf2fca498192601100`;
 	assert(fixed == want);
+
+	char[] inflate = flate::inflate(tmem, fixed)!!;
+	assert(inflate == bytes);
 }
 
-fn void test_deflate_store() => @pool()
+fn void test_flate_store() => @pool()
 {
 	char[] bytes = "hello world";
 	char[] non_comp = flate::deflate(tmem, bytes, &flate::store_block)!!;
 	assert(non_comp.len == 1 + 2 + 2 + bytes.len);
 	assert(non_comp[0] == 1);
 	assert(non_comp[5..] == bytes[..]);
+
+	char[] inflate = flate::inflate(tmem, non_comp)!!;
+	assert(inflate == bytes);
 }
 
