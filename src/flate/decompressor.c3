@@ -54,9 +54,67 @@ fn void? HuffDecompressor.store_block(&self)
 
 fn void? HuffDecompressor.fixed_block(&self)
 {
+	huff::generate_fixed_trees(&self.lt, &self.dt)!;
+	return self.inflate_block();
 }
 
 fn void? HuffDecompressor.dynamic_block(&self)
 {
+}
+
+fn void? HuffDecompressor.inflate_block(&self)
+{
+	uint length, off;
+	while (try sym = self.decode_symbol(&self.lt))
+	{
+		if (sym < END_OF_BLOCK)
+		{
+			self.out.push((char)sym);
+			continue;
+		}
+		if (sym == END_OF_BLOCK) break;
+
+		sym -= 257;
+
+		length = len_base[sym];
+		if (len_extra[sym])
+		{
+			length += self.getbits(len_extra[sym])!;
+		}
+
+		if (try dist = self.decode_symbol(&self.dt))
+		{
+			off = dist_base[dist];
+			if (dist_extra[dist])
+			{
+				off += self.getbits(dist_extra[dist])!;
+			}
+		}
+
+		for (usz i = 0; i < length; i++)
+		{
+			usz n = self.out.len() - off;
+			char b = self.out.array_view()[n];
+			self.out.push(b);
+		}
+	}
+}
+
+fn int? HuffDecompressor.decode_symbol(&self, HuffTree *tree) => @pool()
+{
+	uint code = 0;
+	for (int len = 1; len < huff::MAX_BITS; len++)
+	{
+		code = code << 1 + self.getbits(1)!;
+		foreach (int i, bits: tree.blen)
+		{
+			if (bits != len) continue;
+			uint tcode = bits::reverse(tree.codes[i]) >> (32 - bits);
+			if (code != tcode) continue;
+			// io::printfn("symbol found: %c", i);
+			return i;
+		}
+	}
+	return NOT_FOUND?;
 }
 

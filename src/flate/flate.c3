@@ -171,7 +171,7 @@ fn void test_flate_fixed() => @pool()
 	assert(fixed == want);
 
 	char[] inflate = flate::inflate(tmem, fixed)!!;
-	assert(inflate == bytes);
+	assert(inflate == bytes, "got: '%s', want: '%s'", (String)inflate, (String)bytes);
 }
 
 fn void test_flate_store() => @pool()
