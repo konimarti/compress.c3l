@@ -86,3 +86,21 @@ fn void test_huff_codegen() @test
 	assert(canonical_codes(&codes, &blen)!! == 3);
 	assert(codes == want);
 }
+
+
+<*
+ Fixed Huffman code trees according to RFC 1951.
+*>
+fn void? generate_fixed_trees(HuffTree *lt, HuffTree *dt)
+{
+	*lt = huff::generate_from_lengths({
+		[  0..143] = 8,
+		[144..255] = 9,
+		[256..279] = 7,
+		[280..287] = 8,
+	})!;
+
+	*dt = huff::generate_from_lengths({
+		[0..31] = 5,
+	})!;
+}

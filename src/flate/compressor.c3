@@ -292,15 +292,7 @@ fn void? HuffCompressor.write_dynamic_header(&self, bool final = true) => @pool(
 
 fn void? HuffCompressor.build_fixed_trees(&self)
 {
-	self.lt = huff::generate_from_lengths({
-		[  0..143] = 8,
-		[144..255] = 9,
-		[256..279] = 7,
-		[280..287] = 8,
-	})!;
-	self.dt = huff::generate_from_lengths({
-		[0..31] = 5,
-	})!;
+	huff::generate_fixed_trees(&self.lt, &self.dt)!;
 }
 
 fn void? HuffCompressor.write_fixed_header(&self, bool final = true) => @pool()
