@@ -20,6 +20,12 @@ fn void BitStream.init(&self, Allocator allocator) => self.list.init(allocator);
 fn void BitStream.tinit(&self) => self.init(tmem);
 fn void BitStream.free(&self) => self.list.free();
 
+fn void BitStream.init_with_array(&self, Allocator allocator, Type[] values)
+{
+	self.list.init_with_array(allocator, values);
+}
+fn void BitStream.tinit_with_array(&self, Type[] values) => self.init_with_array(tmem, values);
+
 fn usz? BitStream.to_format(&self, Formatter *f) @dynamic => @pool()
 {
 	$if Type == char:
@@ -29,6 +35,38 @@ fn usz? BitStream.to_format(&self, Formatter *f) @dynamic => @pool()
 	$else
 	return f.printf("%s", self.list);
 	$endif
+}
+
+<*
+ @param num_bits         : "Number of bits to read"
+ @require num_bits >= 1  : "Number of bits must be at least 1"
+ @require num_bits <= 32 : "Number of bits can not be larger than 32"
+*>
+fn uint BitStream.read(&self, isz num_bits)
+{
+	if (self.list.len() == 0) return 0;
+
+	uint v;
+	usz available, rem;
+	Type cur;
+
+	while (num_bits && self.list.len())
+	{
+		cur = self.list[0];
+		available = BITS - self.bitpos; // Available in current byte
+		rem = num_bits > available ? available : num_bits;
+		v = (v << rem) & (cur & ( ((1<<(self.bitpos+rem))-1) ^ ((1<<self.bitpos)-1)));
+
+		self.bitpos += rem;
+		while (self.bitpos > BITS)
+		{
+			(void)self.list.pop_first();
+			self.bitspos -= BITS;
+		}
+
+		num_bits -= rem;
+	}
+	return v;
 }
 
 <*
