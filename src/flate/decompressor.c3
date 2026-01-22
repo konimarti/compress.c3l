@@ -109,8 +109,7 @@ fn int? HuffDecompressor.decode_symbol(&self, HuffTree *tree) => @pool()
 		foreach (int i, bits: tree.blen)
 		{
 			if (bits != len) continue;
-			uint tcode = bits::reverse(tree.codes[i]) >> (32 - bits);
-			if (code != tcode) continue;
+			if (code != tree.codes[i]) continue;
 			// io::printfn("symbol found: %c", i);
 			return i;
 		}

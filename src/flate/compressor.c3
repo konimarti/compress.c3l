@@ -50,8 +50,8 @@ fn void? HuffCompressor.build_trees(&self, Token[] tokens)
 	lt_freqs[END_OF_BLOCK]++;
 
 	// Generate Huffman codes
-	self.lt = huff::generate(&lt_freqs)!;
-	self.dt = huff::generate(&dt_freqs)!;
+	self.lt = huff::generate(&lt_freqs, reverse: true)!;
+	self.dt = huff::generate(&dt_freqs, reverse: true)!;
 }
 
 struct CodeLengthEncoder
@@ -107,7 +107,7 @@ fn void? CodeLengthEncoder.encode(&self, char[] lt_len, char[] dt_len)
 
 	assert(self.max_sym >= 0);
 
-	self.ct = huff::generate(freqs[..], 5)!;
+	self.ct = huff::generate(freqs[..], 5, reverse: true)!;
 }
 
 fn char[] encode_code_lengths(Allocator allocator, char[] seq) @private => @pool()
@@ -292,7 +292,7 @@ fn void? HuffCompressor.write_dynamic_header(&self, bool final = true) => @pool(
 
 fn void? HuffCompressor.build_fixed_trees(&self)
 {
-	huff::generate_fixed_trees(&self.lt, &self.dt)!;
+	huff::generate_fixed_trees(&self.lt, &self.dt, reverse: true)!;
 }
 
 fn void? HuffCompressor.write_fixed_header(&self, bool final = true) => @pool()
