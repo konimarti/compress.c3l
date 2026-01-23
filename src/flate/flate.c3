@@ -15,7 +15,6 @@ fn char[]? uncompress(Allocator allocator, char[] bytes) @inline => inflate(allo
 fn char[]? tuncompress(char[] bytes) @inline => inflate(tmem, bytes);
 
 faultdef INVALID_BLOCK_TYPE;
-import std;
 <*
 @return? INVALID_BLOCK_TYPE
 *>
@@ -29,9 +28,6 @@ fn char[]? inflate(Allocator allocator, char[] bytes) => @pool()
 	{
 		final = d.getbits(1)!;
 		type = d.getbits(2)!;
-
-		io::printfn("bfinal=%d", final);
-		io::printfn("btype=%d", type);
 
 		switch(type)
 		{
@@ -161,6 +157,9 @@ fn void test_deflate_dynamic() => @pool()
 	char[] comp = flate::deflate(tmem, bytes, &flate::dynamic_block)!!;
 	char[] want = x`2de8b1090000080341ace2700a160f011bd70f88cd15d7058ad590ef8d01`;
 	assert(comp == want);
+
+	char[] inflate = flate::inflate(tmem, comp)!!;
+	assert(inflate == bytes, "got: '%s', want '%s'", (String)inflate, (String)bytes);
 }
 
 fn void test_flate_fixed() => @pool()

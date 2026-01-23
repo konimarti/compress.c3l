@@ -125,22 +125,23 @@ fn uint? BitReader.read(&self, isz num_bits)
 {
 	Type cur;
 	uint v;
-	usz available, rem;
+	usz available, rem, consumed;
 
 	while (num_bits > 0)
 	{
 		if (self.list.len() == 0) return NOT_ENOUGH_BITS~;
-		cur = self.list[self.bitpos/8];
+		cur = self.list[0];
 		available = BITS - self.bitpos; // Available bits in current byte.
 		rem = num_bits > available ? available : num_bits;
-		v = (v << rem) | ((cur >> self.bitpos) & ((1 << rem)-1));
+		v |= ((cur >> self.bitpos) & ((1 << rem)-1)) << consumed;
+		num_bits -= rem;
+		consumed += rem;
 		self.bitpos += rem;
 		while (self.bitpos >= BITS)
 		{
 			(void)self.list.pop_first();
 			self.bitpos -= BITS;
 		}
-		num_bits -= rem;
 	}
 	return v;
 }
@@ -227,5 +228,28 @@ fn void test_bitreader_char() => @pool()
 	assert(br.read(1)!! == 1);
 	assert(br.read(2)!! == 2);
 	assert(br.read(2)!! == 3);
+}
+
+fn void test_bitreader_boundary() => @pool()
+{
+	BitReader{char} br;
+	br.tinit({0b10000011, 0b101110});
+	assert(br.read(5)!! == 3);
+	assert(br.bitpos == 5);
+	assert(br.read(9)!! == 0b101110100);
+}
+
+fn void test_bitreader_example() => @pool()
+{
+	BitReader{char} br;
+	br.tinit(x`2de8b1090000080341ace2700a160f011bd70f88cd15d7058ad590ef8d01`);
+
+	assert(br.read(1)!! == 1);
+	assert(br.read(2)!! == 0b10);
+	assert(br.bitpos == 3);
+	assert(br.read(5)!! == 5);  // HLIT
+	assert(br.read(5)!! == 8);  // HDIST
+	assert(br.read(4)!! == 15); // HDIST
+	assert(br.bitpos == 1);
 }
 

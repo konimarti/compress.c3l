@@ -7,7 +7,7 @@ const END_OF_BLOCK = 256;
 
 struct HuffCompressor
 {
-	BitWriter{char} stream;
+	bitio::BitWriter{char} stream;
 	HuffTree lt; // Literal/Length tree
 	HuffTree dt; // Distance tree
 }
@@ -363,10 +363,8 @@ fn void HuffCompressor.write_match(&self, uint len, uint dist)
 
 // Create code-length Huff codes
 char[*] hc_order = {
-	16, 17, 18,  0,  8,
-	 7,  9,  6, 10,  5,
-	11,  4, 12,  3, 13,
-	 2, 14,  1, 15,
+	16, 17, 18,  0,  8, 7,  9,  6, 10,  5,
+	11,  4, 12,  3, 13, 2, 14,  1, 15,
  };
 
 <* Lengths base values *>
