@@ -38,7 +38,7 @@ fn char[]? inflate(Allocator allocator, char[] bytes) => @pool()
 			case 0: d.store_block()!;
 			case 1: d.fixed_block()!;
 			case 2: d.dynamic_block()!;
-			default: return INVALID_BLOCK_TYPE?;
+			default: return INVALID_BLOCK_TYPE~;
 		}
 	}
 	return d.out.to_array(allocator);

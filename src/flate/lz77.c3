@@ -179,7 +179,7 @@ fn MatchPair? MatchFinder.find_match(&self, int p, char[] lookahead)
 	// Put byte into sliding window.
 	self.put_char(lookahead[0]);
 
-	if (best_len == 0 || best_dist == 0) return NOT_FOUND?;
+	if (best_len == 0 || best_dist == 0) return NOT_FOUND~;
 
 	// Insert all positions we're about to jump.
 	for (int i = 1; i < best_len; i++)
@@ -275,7 +275,7 @@ fn char[] construct(Allocator allocator, Token[] tokens) => @pool()
  circbuf implements a circular ring buffer with a fixed-size sliding window.
  The size of the sliding window is given by generic parameter N.
 *>
-module compress::flate::lz77::circbuf{N};
+module compress::flate::lz77::circbuf<N>;
 
 struct CircularBuffer
 {

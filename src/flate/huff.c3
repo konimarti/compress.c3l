@@ -89,7 +89,7 @@ fn int? canonical_codes(uint[] codes, char[] blen)
 		next_code[len-1]++;
 		max_sym = i;
 	}
-	if (max_sym < 0) return ERR_CODEGEN?;
+	if (max_sym < 0) return ERR_CODEGEN~;
 	return max_sym;
 }
 

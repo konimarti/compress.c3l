@@ -42,7 +42,7 @@ fn void? HuffDecompressor.store_block(&self)
 	// Sanity check: compare length with the inverse.
 	if (length != (~inv_length & 0x0000FFFF))
 	{
-		return INVALID_LENGTH?;
+		return INVALID_LENGTH~;
 	}
 
 	// Copy `length` bytes to `out`.
@@ -114,6 +114,6 @@ fn int? HuffDecompressor.decode_symbol(&self, HuffTree *tree) => @pool()
 			return i;
 		}
 	}
-	return NOT_FOUND?;
+	return NOT_FOUND~;
 }
 

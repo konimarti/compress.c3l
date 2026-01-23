@@ -3,7 +3,7 @@
 <*
  @require Type.kindof == UNSIGNED_INT
 *>
-module compress::flate::bitio{Type};
+module compress::flate::bitio<Type>;
 import std::io, std::collections::list, std::encoding::hex;
 
 const BITS = Type.sizeof * 8;
@@ -90,7 +90,7 @@ fn Type[]? BitWriter.flush(&self, Allocator allocator, bool fill = false)
 	if (fill) self.fill();
 	usz q = self.bitpos % BITS;
 	usz len = self.bitpos / BITS;
-	if (len == 0) return NOT_ENOUGH_BITS?;
+	if (len == 0) return NOT_ENOUGH_BITS~;
 	Type[] array = self.list.to_array(allocator)[:len];
 	Type last = self.list[^1];
 	self.bitpos -= BITS * len;
@@ -113,7 +113,7 @@ fn Type? BitReader.pop_first(&self)
 	{
 		return self.list.pop_first();
 	}
-	return NOT_PERMITTED?;
+	return NOT_PERMITTED~;
 }
 
 <*
@@ -129,7 +129,7 @@ fn uint? BitReader.read(&self, isz num_bits)
 
 	while (num_bits > 0)
 	{
-		if (self.list.len() == 0) return NOT_ENOUGH_BITS?;
+		if (self.list.len() == 0) return NOT_ENOUGH_BITS~;
 		cur = self.list[self.bitpos/8];
 		available = BITS - self.bitpos; // Available bits in current byte.
 		rem = num_bits > available ? available : num_bits;

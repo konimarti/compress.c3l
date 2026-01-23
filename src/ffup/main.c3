@@ -128,7 +128,7 @@ fn Option[]? getopts(Allocator allocator, String[] args, String optstring, int *
 					i++;
 					opts.push({.flag=c, .arg=args[0]});
 				} else {
-					return MISSING_ARGUMENT?;
+					return MISSING_ARGUMENT~;
 				}
 			} else {
 				opts.push({.flag=c, .arg=""});
