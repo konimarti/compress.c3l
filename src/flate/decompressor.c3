@@ -150,7 +150,7 @@ fn void? HuffDecompressor.inflate_block(&self)
 fn int? HuffDecompressor.decode_symbol(&self, HuffTree *tree) => @pool()
 {
 	uint code = 0;
-	for (int len = 1; len < huff::MAX_BITS; len++)
+	for (int len = 1; len <= huff::MAX_BITS; len++)
 	{
 		code = code << 1 + self.getbits(1)!;
 		foreach (int i, bits: tree.blen)

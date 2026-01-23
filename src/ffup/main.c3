@@ -11,34 +11,43 @@ fn void usage()
 
 	Writes the deflated data of a file (or from stdin) in hex to stdout.
 
-	ffup [-f <file>] [ -n | -d | -i ]
+	ffup [-f <file>] [-0|-1|-2] [-w]
 
 	-f <file>       File to deflate. If not set, read from stdin.
-	-n              Non-compressed blocks.
-	-d              Use dynamic Huffman codes.
-	-i              Use fixed Huffman codes.
-	-x              Hexdump compressed data.
+	-0              Non-compressed blocks.
+	-1              Use fixed Huffman codes.
+	-2              Use dynamic Huffman codes.
+	-w              Write data to stdout (compressed data as hexdump).
 
-	Example usage: ffup -df main.c3 | xxd -r -p | puff -w
+	Example usage: puffc3 -2wf main.c3 | xxd -r -p | puff -w
 
 	`);
 }
 
+enum CompressMode
+{
+	INFLATE,
+	STORE,
+	FIXED,
+	DYNAMIC,
+}
+
 fn void main(String[] args) => @pool()
 {
-	bool hex = false;
-	DeflateBlockFn deflate = &flate::dynamic_block;
+
+	bool write = false;
+	CompressMode mode = INFLATE;
 	String f;
-	if (try opts = getopt::getopts(tmem, args, "ndixf:"))
+	if (try opts = getopt::getopts(tmem, args, "012wf:"))
 	{
 		foreach (opt: opts)
 		{
 			switch (opt.flag)
 			{
-				case 's': deflate = &flate::store_block;
-				case 'd': deflate = &flate::dynamic_block;
-				case 'i': deflate = &flate::fixed_block;
-				case 'x': hex = true;
+				case '0': mode = STORE;
+				case '1': mode = FIXED;
+				case '2': mode = DYNAMIC;
+				case 'w': write = true;
 				case 'f': f = opt.arg;
 			}
 		}
@@ -49,21 +58,51 @@ fn void main(String[] args) => @pool()
 		return;
 	}
 
+	Clock t;
+	NanoDuration elapsed;
+
 	char[] bytes, out;
+
 	InStream reader = f.len ? &&file::open(f, "rb+")!! : io::stdin();
 	bytes = io::read_fully(tmem, reader)!!;
 
-	Clock t = clock::now();
-	out = flate::deflate(tmem, bytes, deflate)!!;
-	NanoDuration elapsed = t.mark();
-
-	if (bytes.len)
+	if (mode == INFLATE)
 	{
-		io::eprintfn("Size: %d bytes, Compressed: %d bytes", bytes.len, out.len);
-		io::eprintfn("Compression ratio: %g %%", 100.0*out.len/bytes.len);
-		io::eprintfn("%3.1f MB/sec throughput (elapsed time: %s)", bytes.len/(double)elapsed * 1000.0, elapsed);
+		t = clock::now();
+		out = flate::inflate(tmem, bytes)!!;
+		elapsed = t.mark();
+
+		if (bytes.len)
+		{
+			io::eprintfn("Size: %d bytes, Uncompressed: %d bytes", bytes.len, out.len);
+			io::eprintfn("%3.1f MB/sec throughput (elapsed time: %s)", bytes.len/(double)elapsed * 1000.0, elapsed);
+		}
+		if (write) io::printfn("%s", (String)out);
 	}
-	if (hex) io::printfn("%s", hex::tencode(out));
+	else
+	{
+		DeflateBlockFn deflate = &flate::dynamic_block;
+		switch (mode)
+		{
+			case STORE:   deflate = &flate::store_block;
+			case FIXED:   deflate = &flate::fixed_block;
+			case DYNAMIC: deflate = &flate::dynamic_block;
+			case INFLATE: unreachable("internal error");
+		}
+
+		t = clock::now();
+		out = flate::deflate(tmem, bytes, deflate)!!;
+		elapsed = t.mark();
+
+		if (bytes.len)
+		{
+			io::eprintfn("Size: %d bytes, Compressed: %d bytes", bytes.len, out.len);
+			io::eprintfn("Compression ratio: %g %%", 100.0*out.len/bytes.len);
+			io::eprintfn("%3.1f MB/sec throughput (elapsed time: %s)", bytes.len/(double)elapsed * 1000.0, elapsed);
+		}
+		if (write) io::printfn("%s", hex::tencode(out));
+	}
+
 }
 
 
