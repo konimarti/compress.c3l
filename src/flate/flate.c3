@@ -151,6 +151,7 @@ fn void? fixed_block(HuffCompressor *c, char[] bytes, bool final) => @pool()
 module compress::deflate::test @test;
 import compress::flate;
 
+import std;
 fn void test_deflate_dynamic() => @pool()
 {
 	char[] bytes = "hello world world hello";

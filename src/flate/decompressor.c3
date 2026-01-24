@@ -28,7 +28,6 @@ fn uint? HuffDecompressor.getbits(&self, isz nbits)
 	return self.stream.read(nbits);
 }
 
-import std;
 faultdef INVALID_LENGTH;
 fn void? HuffDecompressor.store_block(&self)
 {
@@ -67,26 +66,26 @@ fn void? HuffDecompressor.dynamic_block(&self)
 fn void? HuffDecompressor.decode_trees(&self)
 {
 	char[288 + 32] lengths;
-	uint hlit, hdist, hclen;
+	uint nlit, ndist, nclen;
 	int sym, len;
 
-	hlit = self.getbits(5)!;
-	hdist = self.getbits(5)!;
-	hclen = self.getbits(4)!;
+	nlit = self.getbits(5)! + 257;
+	ndist = self.getbits(5)! + 1;
+	nclen = self.getbits(4)! + 4;
 
 	// Read bit lengths for code length codes.
 	lengths[:19] = 0;
-	for (usz i = 0; i < hclen+4; i++)
+	for (usz i = 0; i < nclen; i++)
 	{
 		lengths[hc_order[i]] = (char)self.getbits(3)!;
 	}
 
 	// Build code length tree.
-	HuffTree code_length = huff::generate_from_lengths(lengths[:hclen+4])!;
+	HuffTree code_length = huff::generate_from_lengths(lengths[:nclen])!;
 
 	lengths[:19] = 0;
 	// Decode code length for the dynamic trees.
-	for (usz num = 0; num < hlit + 257 + hdist + 1;)
+	for (uint num = 0; num < nlit + ndist;)
 	{
 		len = 1;
 		sym = self.decode_symbol(&code_length)!!;
@@ -105,8 +104,8 @@ fn void? HuffDecompressor.decode_trees(&self)
 		while (len--) lengths[num++] = (char)sym;
 	}
 
-	self.lt = huff::generate_from_lengths(lengths[:hlit+257])!;
-	self.dt = huff::generate_from_lengths(lengths[hlit+257:hdist+1])!;
+	self.lt = huff::generate_from_lengths(lengths[0:nlit])!;
+	self.dt = huff::generate_from_lengths(lengths[nlit:ndist])!;
 }
 
 fn void? HuffDecompressor.inflate_block(&self)
@@ -147,7 +146,7 @@ fn void? HuffDecompressor.inflate_block(&self)
 	}
 }
 
-fn int? HuffDecompressor.decode_symbol(&self, HuffTree *tree) => @pool()
+fn int? HuffDecompressor.decode_symbol(&self, HuffTree *tree)
 {
 	uint code = 0;
 	for (int len = 1; len <= huff::MAX_BITS; len++)

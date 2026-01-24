@@ -113,7 +113,7 @@ fn void? CodeLengthEncoder.encode(&self, char[] lt_len, char[] dt_len)
 fn char[] encode_code_lengths(Allocator allocator, char[] seq) @private => @pool()
 {
 	List{char} enc;
-	enc.tinit(seq.len); // Allocate a bit more than necessary
+	enc.tinit(seq.len);
 
 	usz i, r, rem;
 	while (i < seq.len)

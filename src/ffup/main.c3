@@ -6,14 +6,13 @@ import std, getopt, compress::flate;
 fn void usage()
 {
 	io::printn(`
-	ffup - the opposite of zlib's puff. Compresses data using the Deflate
-	compression method.
+	ffup - the C3 version of zlib's puff.
 
-	Writes the deflated data of a file (or from stdin) in hex to stdout.
+	Compresses and decompress data using the DEFLATE algorithm (RFC 1951).
 
 	ffup [-f <file>] [-0|-1|-2] [-w]
 
-	-f <file>       File to deflate. If not set, read from stdin.
+	-f <file>       Input file. If not specified, read from stdin.
 	-0              Non-compressed blocks.
 	-1              Use fixed Huffman codes.
 	-2              Use dynamic Huffman codes.
@@ -24,7 +23,7 @@ fn void usage()
 	`);
 }
 
-enum CompressMode
+enum FlateMode
 {
 	INFLATE,
 	STORE,
@@ -34,9 +33,8 @@ enum CompressMode
 
 fn void main(String[] args) => @pool()
 {
-
 	bool write = false;
-	CompressMode mode = INFLATE;
+	FlateMode mode = INFLATE;
 	String f;
 	if (try opts = getopt::getopts(tmem, args, "012wf:"))
 	{
@@ -63,7 +61,7 @@ fn void main(String[] args) => @pool()
 
 	char[] bytes, out;
 
-	InStream reader = f.len ? &&file::open(f, "rb+")!! : io::stdin();
+	InStream reader = (f.len && f != "-") ? &&file::open(f, "rb+")!! : io::stdin();
 	bytes = io::read_fully(tmem, reader)!!;
 
 	if (mode == INFLATE)
@@ -102,11 +100,10 @@ fn void main(String[] args) => @pool()
 		}
 		if (write) io::printfn("%s", hex::tencode(out));
 	}
-
 }
 
 
-// getopt implements a POSIX-compliant command-line parser.
+// getopt module implements a POSIX-compliant command-line parser.
 module getopt;
 import std::collections::list;
 
