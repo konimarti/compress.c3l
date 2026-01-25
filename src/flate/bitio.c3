@@ -43,6 +43,7 @@ fn void BitWriter.write(&self, uint bits, isz num_bits)
 	isz consumed, offset, n;
 
 	bits &= (1U << num_bits) - 1;
+	// io::printfn("write %d bits: %4d %0*b", num_bits, bits, num_bits, bits);
 
 	consumed = 0;
 	offset = self.bitpos % BITS;
@@ -143,6 +144,7 @@ fn uint? BitReader.read(&self, isz num_bits)
 			self.bitpos -= BITS;
 		}
 	}
+	// io::printfn("read %d bits: %4d %0*b", consumed, v, consumed, v);
 	return v;
 }
 

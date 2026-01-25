@@ -81,7 +81,8 @@ fn void? HuffDecompressor.decode_trees(&self)
 	}
 
 	// Build code length tree.
-	HuffTree code_length = huff::generate_from_lengths(lengths[:nclen])!;
+	HuffTree code_length =
+		huff::generate_from_lengths(lengths[:19])!;
 
 	lengths[:19] = 0;
 	// Decode code length for the dynamic trees.
