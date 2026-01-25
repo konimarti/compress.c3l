@@ -75,7 +75,7 @@ fn void main(String[] args) => @pool()
 			io::eprintfn("Size: %d bytes, Uncompressed: %d bytes", bytes.len, out.len);
 			io::eprintfn("%3.1f MB/sec throughput (elapsed time: %s)", bytes.len/(double)elapsed * 1000.0, elapsed);
 		}
-		if (write) io::printfn("%s", (String)out);
+		if (write) io::printf("%s", (String)out);
 	}
 	else
 	{
@@ -98,7 +98,7 @@ fn void main(String[] args) => @pool()
 			io::eprintfn("Compression ratio: %g %%", 100.0*out.len/bytes.len);
 			io::eprintfn("%3.1f MB/sec throughput (elapsed time: %s)", bytes.len/(double)elapsed * 1000.0, elapsed);
 		}
-		if (write) io::printfn("%s", hex::tencode(out));
+		if (write) io::printf("%s", hex::tencode(out));
 	}
 }
 

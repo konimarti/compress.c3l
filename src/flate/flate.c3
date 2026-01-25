@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Koni Marti. All rights reserved.
 // Use of this source code is governed by the MIT license.
 module compress::flate;
+import std::io;
 
 fn char[]? compress(Allocator allocator, char[] bytes) @inline
 {
@@ -18,26 +19,33 @@ faultdef INVALID_BLOCK_TYPE;
 <*
 @return? INVALID_BLOCK_TYPE
 *>
-fn char[]? inflate(Allocator allocator, char[] bytes) => @pool()
+fn char[]? inflate(Allocator allocator, char[] bytes)
 {
-	HuffDecompressor d;
-	d.init(tmem, bytes);
+	ByteReader byte_reader;
+	byte_reader.init(bytes);
+
+	ByteWriter byte_writer;
+	byte_writer.init(allocator);
+
+	HuffDecompressor decomp;
+	decomp.init(&byte_reader, &byte_writer);
 
 	uint final, type;
-	while (!final)
+	while (true)
 	{
-		final = d.getbits(1)!;
-		type = d.getbits(2)!;
+		final = decomp.getbits(1)!;
+		type  = decomp.getbits(2)!;
 
 		switch(type)
 		{
-			case 0: d.store_block()!;
-			case 1: d.fixed_block()!;
-			case 2: d.dynamic_block()!;
+			case 0: decomp.store_block()!;
+			case 1: decomp.fixed_block()!;
+			case 2: decomp.dynamic_block()!;
 			default: return INVALID_BLOCK_TYPE~;
 		}
+		if (final) break;
 	}
-	return d.out.to_array(allocator);
+	return byte_writer.array_view();
 }
 
 const MAX_BLOCK_SIZE = 65_535;
@@ -130,7 +138,7 @@ fn void? dynamic_block(HuffCompressor *c, char[] bytes, bool final) => @pool()
 {
 	Token[] tokens = lz77::tokenize(tmem, bytes);
 	c.build_trees(tokens)!;
-	c.write_dynamic_header()!;
+	c.write_dynamic_header(final)!;
 	c.write_compressed_data(tokens)!;
 	c.write_end_of_block();
 }
@@ -143,7 +151,7 @@ fn void? fixed_block(HuffCompressor *c, char[] bytes, bool final) => @pool()
 {
 	Token[] tokens = lz77::tokenize(tmem, bytes);
 	c.build_fixed_trees()!;
-	c.write_fixed_header()!;
+	c.write_fixed_header(final)!;
 	c.write_compressed_data(tokens)!;
 	c.write_end_of_block();
 }

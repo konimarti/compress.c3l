@@ -1,42 +1,40 @@
 // Copyright (c) 2026 Koni Marti. All rights reserved.
 // Use of this source code is governed by the MIT license.
 module compress::flate;
-import std::collections::list;
+import std::collections::list, std::io;
 
 struct HuffDecompressor
 {
-	bitio::BitReader{char} stream;
-	List{char} out;
+	bitio::BitReader{char} reader;
+	ByteWriter *writer;
 	HuffTree lt; // Literal/Length tree
 	HuffTree dt; // Distance tree
 }
 
-fn void HuffDecompressor.init(&self, Allocator allocator, char[] bytes)
+fn void HuffDecompressor.init(&self, InStream r, ByteWriter *w)
 {
-	self.stream.init(allocator, bytes);
-	self.out.init(allocator, bytes.len);
+	self.reader.init(r);
+	self.writer = w;
 }
 
 fn void HuffDecompressor.free(&self)
 {
-	self.free();
 	*self = {};
 }
 
-fn uint? HuffDecompressor.getbits(&self, isz nbits)
+fn uint? HuffDecompressor.getbits(&self, isz nbits) @inline
 {
-	return self.stream.read(nbits);
+	return self.reader.read_bits(nbits);
 }
 
 faultdef INVALID_LENGTH;
 fn void? HuffDecompressor.store_block(&self)
 {
-	(void)self.getbits(5)!;
-	assert(self.stream.bitpos == 0);
+	self.getbits(5)!;
 
 	// Lengths are stored in 16bits in little endian (LSB).
-	uint length = self.getbits(8)! | self.getbits(8)!! << 8;
-	uint inv_length = self.getbits(8)! | self.getbits(8)!! << 8;
+	uint length = self.getbits(8)! | self.getbits(8)! << 8;
+	uint inv_length = self.getbits(8)! | self.getbits(8)! << 8;
 
 	// Sanity check: compare length with the inverse.
 	if (length != (~inv_length & 0x0000FFFF))
@@ -44,11 +42,14 @@ fn void? HuffDecompressor.store_block(&self)
 		return INVALID_LENGTH~;
 	}
 
-	// Copy `length` bytes to `out`.
 	while (length--)
 	{
-		self.out.push(self.stream.pop_first())!;
+		self.writer.write_byte((char)self.getbits(8)!)!;
 	}
+
+	// LimitReader lr;
+	// lr.init(&self.reader, length);
+	// io::copy_to(&lr, self.writer)!;
 }
 
 fn void? HuffDecompressor.fixed_block(&self)
@@ -116,7 +117,7 @@ fn void? HuffDecompressor.inflate_block(&self)
 	{
 		if (sym < END_OF_BLOCK)
 		{
-			self.out.push((char)sym);
+			self.writer.write_byte((char)sym)!;
 			continue;
 		}
 		if (sym == END_OF_BLOCK) break;
@@ -138,12 +139,10 @@ fn void? HuffDecompressor.inflate_block(&self)
 			}
 		}
 
-		self.out.reserve(length);
 		for (usz i = 0; i < length; i++)
 		{
-			usz n = self.out.len() - off;
-			char b = self.out.array_view()[n];
-			self.out.push(b);
+			char[] out = self.writer.array_view();
+			self.writer.write_byte(out[^off])!;
 		}
 	}
 }

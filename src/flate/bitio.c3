@@ -10,19 +10,17 @@ const BITS = Type.sizeof * 8;
 
 faultdef NOT_ENOUGH_BITS;
 
-struct BitIO (Printable)
+struct BitWriter (Printable)
 {
 	List{Type} list;
 	usz bitpos;
 }
 
-typedef BitWriter = BitIO;
-
 fn void BitWriter.init(&self, Allocator allocator) => self.list.init(allocator);
 fn void BitWriter.tinit(&self) => self.init(tmem);
 fn void BitWriter.free(&self) => self.list.free();
 
-fn usz? BitIO.to_format(&self, Formatter *f) @dynamic => @pool()
+fn usz? BitWriter.to_format(&self, Formatter *f) @dynamic => @pool()
 {
 	$if Type == char:
 	// Hex-encoded output is useful for debugging, e.g. with puff:
@@ -100,21 +98,42 @@ fn Type[]? BitWriter.flush(&self, Allocator allocator, bool fill = false)
 	return array;
 }
 
-typedef BitReader = BitIO;
-
-fn void BitReader.init(&self, Allocator allocator, Type[] values) => self.list.init_with_array(allocator, values);
-fn void BitReader.tinit(&self, Type[] values) => self.init(tmem, values);
-fn void BitReader.push(&self, Type value) => self.list.push(value);
-fn void BitReader.push_all(&self, Type[] value) => self.list.push_all(value);
-
-faultdef NOT_PERMITTED;
-fn Type? BitReader.pop_first(&self)
+struct BitReader (InStream)
 {
-	if (self.bitpos == 0)
+	InStream reader;
+	ulong bits;
+	isz   nbits;
+}
+
+fn void BitReader.init(&self, InStream reader)
+{
+	*self = { .reader = reader, .bits = 0, .nbits = 0};
+}
+
+fn char? BitReader.read_byte(&self) @dynamic
+{
+	assert(self.nbits % 8 == 0);
+	return self.reader.read_byte();
+}
+
+fn usz? BitReader.read(&self, char[] buf) @dynamic
+{
+	assert(self.nbits % 8 == 0);
+	return self.reader.read(buf);
+}
+
+fn uint? BitReader.peek_bits(&self, isz num_bits)
+{
+	while (self.nbits < num_bits)
 	{
-		return self.list.pop_first();
+		// New bits are appended on the left
+		char c = self.reader.read_byte() ?? 0;
+		self.bits |= (ulong)c << self.nbits;
+		self.nbits += 8;
 	}
-	return NOT_PERMITTED~;
+
+	ulong mask = (1UL << num_bits) - 1;
+	return (uint)(self.bits & mask);
 }
 
 <*
@@ -122,39 +141,20 @@ fn Type? BitReader.pop_first(&self)
  @require num_bits >= 1  : "Number of bits must be at least 1"
  @require num_bits <= 32 : "Number of bits can not be larger than 32"
 *>
-fn uint? BitReader.read(&self, isz num_bits)
+fn uint? BitReader.read_bits(&self, isz num_bits)
 {
-	Type cur;
-	uint v;
-	usz available, rem, consumed;
-
-	while (num_bits > 0)
-	{
-		if (self.list.len() == 0) return NOT_ENOUGH_BITS~;
-		cur = self.list[0];
-		available = BITS - self.bitpos; // Available bits in current byte.
-		rem = num_bits > available ? available : num_bits;
-		v |= ((cur >> self.bitpos) & ((1 << rem)-1)) << consumed;
-		num_bits -= rem;
-		consumed += rem;
-		self.bitpos += rem;
-		while (self.bitpos >= BITS)
-		{
-			(void)self.list.pop_first();
-			self.bitpos -= BITS;
-		}
-	}
-	// io::printfn("read %d bits: %4d %0*b", consumed, v, consumed, v);
+	uint v = self.peek_bits(num_bits)!;
+	self.bits >>= num_bits;
+	self.nbits -= num_bits;
 	return v;
 }
-
 
 module compress::flate::bench @benchmark;
 import compress::flate::bitio;
 
 fn void test_bitwriter_bench() @benchmark
 {
-	BitWriter bw;
+	BitWriter{char} bw;
 	bw.init(mem);
 	defer bw.free();
 
@@ -165,11 +165,11 @@ fn void test_bitwriter_bench() @benchmark
 }
 
 module compress::flate::test @test;
-import compress::flate::bitio;
+import compress::flate::bitio, std::io;
 
 fn void test_bitwriter_char() => @pool()
 {
-	BitWriter{char} bw;
+	bitio::BitWriter{char} bw;
 	bw.tinit();
 
 	bw.write(0b1111101, 3);
@@ -195,7 +195,7 @@ fn void test_bitwriter_char() => @pool()
 
 fn void test_bitwriter_ushort() => @pool()
 {
-	BitWriter{ushort} bshort;
+	bitio::BitWriter{ushort} bshort;
 	bshort.tinit();
 
 	bshort.write(0b1111101, 3);
@@ -219,39 +219,38 @@ fn void test_bitwriter_ushort() => @pool()
 	assert(fl.len == 1);
 }
 
-fn void test_bitreader_char() => @pool()
+fn void test_bitreader_char()
 {
-	BitReader{char} br;
-	br.tinit({0b10000001, 0b1110});
-	assert(br.read(1)!! == 1);
-	assert(br.read(2)!! == 0);
-	assert(br.read(3)!! == 0);
-	assert(br.read(1)!! == 0);
-	assert(br.read(1)!! == 1);
-	assert(br.read(2)!! == 2);
-	assert(br.read(2)!! == 3);
+	ByteReader r = io::wrap_bytes({0b10000001, 0b1110});
+	bitio::BitReader{char} br;
+	br.init(&r);
+	assert(br.read_bits(1)!! == 1);
+	assert(br.read_bits(2)!! == 0);
+	assert(br.read_bits(3)!! == 0);
+	assert(br.read_bits(1)!! == 0);
+	assert(br.read_bits(1)!! == 1);
+	assert(br.read_bits(2)!! == 2);
+	assert(br.read_bits(2)!! == 3);
 }
 
-fn void test_bitreader_boundary() => @pool()
+fn void test_bitreader_boundary()
 {
-	BitReader{char} br;
-	br.tinit({0b10000011, 0b101110});
-	assert(br.read(5)!! == 3);
-	assert(br.bitpos == 5);
-	assert(br.read(9)!! == 0b101110100);
+	ByteReader r = io::wrap_bytes({0b10000011, 0b101110});
+	bitio::BitReader{char} br;
+	br.init(&r);
+	assert(br.read_bits(5)!! == 3);
+	assert(br.read_bits(9)!! == 0b101110100);
 }
 
-fn void test_bitreader_example() => @pool()
+fn void test_bitreader_example()
 {
-	BitReader{char} br;
-	br.tinit(x`2de8b1090000080341ace2700a160f011bd70f88cd15d7058ad590ef8d01`);
-
-	assert(br.read(1)!! == 1);
-	assert(br.read(2)!! == 0b10);
-	assert(br.bitpos == 3);
-	assert(br.read(5)!! == 5);  // HLIT
-	assert(br.read(5)!! == 8);  // HDIST
-	assert(br.read(4)!! == 15); // HDIST
-	assert(br.bitpos == 1);
+	ByteReader r = io::wrap_bytes(x`2de8b1090000080341ace2700a160f011bd70f88cd15d7058ad590ef8d01`);
+	bitio::BitReader{char} br;
+	br.init(&r);
+	assert(br.read_bits(1)!! == 1);
+	assert(br.read_bits(2)!! == 0b10);
+	assert(br.read_bits(5)!! == 5);  // HLIT
+	assert(br.read_bits(5)!! == 8);  // HDIST
+	assert(br.read_bits(4)!! == 15); // HDIST
 }
 
