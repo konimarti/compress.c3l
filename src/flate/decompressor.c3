@@ -14,7 +14,7 @@ struct HuffDecompressor
 fn void HuffDecompressor.init(&self, Allocator allocator, char[] bytes)
 {
 	self.stream.init(allocator, bytes);
-	self.out.init(allocator);
+	self.out.init(allocator, bytes.len);
 }
 
 fn void HuffDecompressor.free(&self)
@@ -138,6 +138,7 @@ fn void? HuffDecompressor.inflate_block(&self)
 			}
 		}
 
+		self.out.reserve(length);
 		for (usz i = 0; i < length; i++)
 		{
 			usz n = self.out.len() - off;
