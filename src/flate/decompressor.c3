@@ -1,41 +1,14 @@
 // Copyright (c) 2026 Koni Marti. All rights reserved.
 // Use of this source code is governed by the MIT license.
 module compress::flate;
-import std::collections::list, std::io;
-
-struct HuffSym
-{
-	uint[huff::MAX_BITS] counts; // Number of symbols of each lengths.
-	uint[288] symbols;           // Canonically ordered symbols.
-}
-
-fn HuffSym gen_symbols(char[] lengths)
-{
-	uint[huff::MAX_BITS+1] offs;
-
-	HuffSym h = {};
-	foreach (len : lengths) h.counts[len]++;
-	if (h.counts[0] == lengths.len) return h; // No codes.
-
-	offs[1] = 0;
-	for (int len = 1; len < huff::MAX_BITS; len++)
-	{
-		offs[len+1] = offs[len] + h.counts[len];
-	}
-
-	foreach (int sym, len: lengths)
-	{
-		if (len != 0) h.symbols[offs[len]++] = sym;
-	}
-	return h;
-}
+import std::io;
 
 struct FlateDecompressor
 {
 	FlateReader reader;
 	ByteWriter *writer;
-	HuffSym ls; // Literal/Length symbols
-	HuffSym ds; // Distance symbols
+	HuffOrder ls; // Literal/Length symbols
+	HuffOrder ds; // Distance symbols
 }
 
 fn void FlateDecompressor.init(&self, InStream r, ByteWriter *w)
@@ -76,14 +49,11 @@ fn void? FlateDecompressor.store_block(&self)
 
 fn void? FlateDecompressor.fixed_block(&self)
 {
-	self.ls = gen_symbols({
-		[  0..143] = 8,
-		[144..255] = 9,
-		[256..279] = 7,
-		[280..287] = 8,
-	});
+	self.ls = huff::build_canonical_symbols(
+		huff::FIXED_LITERAL_LENGTH_CODE_LENGTHS);
 
-	self.ds = gen_symbols({[0..31] = 5});
+	self.ds = huff::build_canonical_symbols(
+		huff::FIXED_DISTANCE_CODE_LENGTHS);
 
 	return self.inflate_block();
 }
@@ -112,7 +82,7 @@ fn void? FlateDecompressor.decode_trees(&self)
 	}
 
 	// Build code length tree.
-	HuffSym code_length = gen_symbols(lengths[:19]);
+	HuffOrder code_length = huff::build_canonical_symbols(lengths[:19]);
 
 	lengths[:19] = 0;
 	// Decode code length for the dynamic trees.
@@ -135,8 +105,8 @@ fn void? FlateDecompressor.decode_trees(&self)
 		while (len--) lengths[num++] = (char)sym;
 	}
 
-	self.ls = gen_symbols(lengths[0:nlit]);
-	self.ds = gen_symbols(lengths[nlit:ndist]);
+	self.ls = huff::build_canonical_symbols(lengths[0:nlit]);
+	self.ds = huff::build_canonical_symbols(lengths[nlit:ndist]);
 }
 
 fn void? FlateDecompressor.inflate_block(&self)
@@ -176,11 +146,11 @@ fn void? FlateDecompressor.inflate_block(&self)
 	}
 }
 
-fn int? FlateDecompressor.decode_symbol(&self, HuffSym *h)
+fn int? FlateDecompressor.decode_symbol(&self, HuffOrder *h)
 {
 	int code, first, count, index;
 	code = 0; first = 0; index = 0;
-	for (int len = 1; len <= huff::MAX_BITS; len++)
+	for (int len = 1; len <= huff::MAX_CODE_BITS; len++)
 	{
 		code = code << 1 + self.getbits(1)!;
 		count = h.counts[len];
