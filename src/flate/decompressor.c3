@@ -69,14 +69,9 @@ fn void? HuffDecompressor.store_block(&self)
 		return INVALID_LENGTH~;
 	}
 
-	while (length--)
-	{
-		self.writer.write_byte((char)self.getbits(8)!)!;
-	}
-
-	// LimitReader lr;
-	// lr.init(&self.reader, length);
-	// io::copy_to(&lr, self.writer)!;
+	LimitReader lr;
+	lr.init(&self.reader, length);
+	io::copy_to(&lr, self.writer)!;
 }
 
 fn void? HuffDecompressor.fixed_block(&self)
