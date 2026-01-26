@@ -28,8 +28,10 @@ fn uint? FlateDecompressor.getbits(&self, uint nbits) @inline
 }
 
 faultdef INVALID_LENGTH;
-fn void? FlateDecompressor.store_block(&self)
+fn void? FlateDecompressor.decode_stored_block(&self)
 {
+	// We already consumed BFINAL and BTYPE in the caller.
+	// Discard remaining bits in this byte to reach next byte boundary.
 	self.getbits(5)!;
 
 	// Lengths are stored in 16bits in little endian (LSB).
@@ -47,7 +49,7 @@ fn void? FlateDecompressor.store_block(&self)
 	io::copy_to(&lr, self.writer)!;
 }
 
-fn void? FlateDecompressor.fixed_block(&self)
+fn void? FlateDecompressor.decode_fixed_block(&self)
 {
 	self.ls = huff::build_canonical_symbols(
 		huff::FIXED_LITERAL_LENGTH_CODE_LENGTHS);
@@ -58,7 +60,7 @@ fn void? FlateDecompressor.fixed_block(&self)
 	return self.inflate_block();
 }
 
-fn void? FlateDecompressor.dynamic_block(&self)
+fn void? FlateDecompressor.decode_dynamic_block(&self)
 {
 	self.decode_trees()!;
 	return self.inflate_block();

@@ -17,9 +17,14 @@ fn void FlateCompressor.init(&self, OutStream wrapped)
 	self.writer.init(wrapped);
 }
 
-fn void? FlateCompressor.setbits(&self, uint bits, uint nbits) @inline
+fn void? FlateCompressor.putbits(&self, uint bits, uint nbits) @inline
 {
 	self.writer.write_bits(bits, nbits)!;
+}
+
+fn void? FlateCompressor.flush_bits(&self) @inline
+{
+	self.writer.flush()!;
 }
 
 fn void? FlateCompressor.build_trees(&self, Token[] tokens)
@@ -76,24 +81,24 @@ fn void? FlateCompressor.write_dynamic_header(&self, bool final = true) => @pool
 
 	// Write dynamic block header.
 	// Push BFINAL (0b1 or 0b0) and BTYPE (0b10).
-	self.setbits(final ? 1 : 0, 1)!;
-	self.setbits(0b10, 2)!;
+	self.putbits(final ? 1 : 0, 1)!;
+	self.putbits(0b10, 2)!;
 
 	// Write 5 bits HLIT (# of literal/length codes - 257)
 	assert(hlit <= 31);
-	self.setbits(hlit, 5)!;
+	self.putbits(hlit, 5)!;
 
 	// Write 5 bits HDIST (# of distance codes - 1)
 	assert(hdist+1 > 0 && hdist < 30);
-	self.setbits(hdist, 5)!;
+	self.putbits(hdist, 5)!;
 
 	// Push 4 bits HCLEN (# of code length codes - 4)
 	assert(hclen >= 4);
-	self.setbits(hclen, 4)!;
+	self.putbits(hclen, 4)!;
 
 	for (i = 0; i < hclen + 4; i++)
 	{
-		self.setbits(encoder.ct.blen[hc_order[i]], 3)!;
+		self.putbits(encoder.ct.blen[hc_order[i]], 3)!;
 	}
 
 	// Write encoded code length.
@@ -101,12 +106,12 @@ fn void? FlateCompressor.write_dynamic_header(&self, bool final = true) => @pool
 	for (i = 0; i < enc.len; )
 	{
 		sym = enc[i++];
-		self.setbits(encoder.ct.codes[sym], encoder.ct.blen[sym])!;
+		self.putbits(encoder.ct.codes[sym], encoder.ct.blen[sym])!;
 		switch (sym)
 		{
-			case 16: self.setbits(enc[i++], 2)!;
-			case 17: self.setbits(enc[i++], 3)!;
-			case 18: self.setbits(enc[i++], 7)!;
+			case 16: self.putbits(enc[i++], 2)!;
+			case 17: self.putbits(enc[i++], 3)!;
+			case 18: self.putbits(enc[i++], 7)!;
 		}
 	}
 
@@ -125,8 +130,8 @@ fn void? FlateCompressor.write_fixed_header(&self, bool final = true) => @pool()
 {
 	// Write fixed block header.
 	// Push BFINAL (0b1 or 0b0) and BTYPE (0b01).
-	self.setbits(final ? 1 : 0, 1)!;
-	self.setbits(0b01, 2)!;
+	self.putbits(final ? 1 : 0, 1)!;
+	self.putbits(0b01, 2)!;
 }
 
 
@@ -147,14 +152,14 @@ fn void? FlateCompressor.write_distance(&self, usz l) @inline
 {
 	char len = self.dt.blen[l];
 	uint code = self.dt.codes[l];
-	self.setbits(code, len)!;
+	self.putbits(code, len)!;
 }
 
 fn void? FlateCompressor.write_literal(&self, usz c) @inline
 {
 	char len = self.lt.blen[c];
 	uint code = self.lt.codes[c];
-	self.setbits(code, len)!;
+	self.putbits(code, len)!;
 }
 
 fn void? FlateCompressor.write_end_of_block(&self) @inline
@@ -173,7 +178,7 @@ fn void? FlateCompressor.write_match(&self, uint len, uint dist)
 	// Write extra bit.
 	if (len_extra[index])
 	{
-		self.setbits(len-len_base[index], len_extra[index])!;
+		self.putbits(len-len_base[index], len_extra[index])!;
 	}
 
 	// Write distance code.
@@ -183,7 +188,7 @@ fn void? FlateCompressor.write_match(&self, uint len, uint dist)
 	// Write extra bit.
 	if (dist_extra[index])
 	{
-		self.setbits(dist-dist_base[index], dist_extra[index])!;
+		self.putbits(dist-dist_base[index], dist_extra[index])!;
 	}
 }
 

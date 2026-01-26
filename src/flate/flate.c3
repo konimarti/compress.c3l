@@ -1,23 +1,121 @@
 // Copyright (c) 2026 Koni Marti. All rights reserved.
 // Use of this source code is governed by the MIT license.
+<*
+ High-level convenience API for DEFLATE compression and decompression.
+ For normal use, call compress()/uncompress(); deflate()/inflate() are
+ lower-level entry points with more control over block handling.
+*>
 module compress::flate;
 import std::io;
 
+<*
+ Compresses the given input using the DEFLATE format (RFC 1951).
+ This is the high-level convenience API. It selects an appropriate block
+ strategy (stored vs. compressed) based on the input and returns a single
+ DEFLATE stream. The caller owns the returned buffer and must free it
+ using the same allocator.
+*>
 fn char[]? compress(Allocator allocator, char[] bytes) @inline
 {
 	if (bytes.len < 32)
 	{
-		return deflate(allocator, bytes, &store_block);
+		return deflate(allocator, bytes, &encode_stored_block);
 	}
-	return deflate(allocator, bytes, &dynamic_block, 1<<16);
+	return deflate(allocator, bytes, &encode_dynamic_block);
 }
+
+<*
+ Convenience wrapper around compress() using the temporary allocator.
+*>
 fn char[]? tcompress(char[] bytes) @inline => compress(tmem, bytes);
+
+<*
+ Decompresses a complete DEFLATE stream into a newly allocated buffer.
+
+ This is the high-level convenience API. It validates block headers and
+ reconstructs the original uncompressed data. The caller owns the returned
+ buffer and must free it using the same allocator.
+*>
 fn char[]? uncompress(Allocator allocator, char[] bytes) @inline => inflate(allocator, bytes);
+
+<*
+ Convenience wrapper around uncompress() using the temporary allocator.
+*>
 fn char[]? tuncompress(char[] bytes) @inline => inflate(tmem, bytes);
 
-faultdef INVALID_BLOCK_TYPE;
+const MAX_BLOCK_SIZE = 65_535;
+
 <*
-@return? INVALID_BLOCK_TYPE
+ Callback type for the DEFLATE block compressors.
+
+ Implementations receive an initialized FlateCompressor and a contiguous
+ slice of the input. They may emit one or more DEFLATE blocks and must set
+ the BFINAL flag on the last block they emit when is_last_chunk is true.
+*>
+alias DeflateBlockFn = fn void?(FlateCompressor *c, char[] input_chunk, bool is_last_chunk);
+
+<*
+ Low-level DEFLATE compressor with pluggable block strategy.
+
+ The input is processed in one or more consecutive chunks. For each chunk,
+ this function calls the user-supplied block_fn, which is responsible for:
+   - performing LZ77 tokenization as needed,
+   - emitting a DEFLATE blocks into the FlateCompressor, and
+   - ensuring the final block it emits has BFINAL = 1 when is_last_chunk
+     is true.
+
+ The FlateCompressor instance is initialized once and reused across all
+ chunks so that a continuous LZ77 history window and streaming use cases
+ can be supported. The compressed bitstream is accumulated and flushed
+ into a newly allocated buffer, which is returned to the caller.
+
+ max_block_len is an upper bound on the number of input bytes passed to a
+ single block_fn call; block_fn is free to emit multiple DEFLATE blocks
+ for its chunk if desired (currently not implemented).
+
+ @param [&inout] allocator : "Allocator for compressed data."
+ @param [in] bytes         : "Input data to be compressed."
+ @param block_fn           : "Callback invoked for each logical input block."
+ @param max_block_len      : "Maximum number of input bytes to pass to block_fn`."
+
+ @return "A newly allocated char[] containing the complete DEFLATE stream."
+*>
+fn char[]? deflate(Allocator allocator, char[] bytes,
+	DeflateBlockFn block_fn = &dynamic_block,
+	usz max_block_len = MAX_BLOCK_SIZE) => @pool()
+{
+	ByteWriter out;
+	out.init(allocator);
+
+	FlateCompressor comp;
+	comp.init(&out);
+
+	usz offset = 0;
+	while (offset < bytes.len)
+	{
+		usz remaining = bytes.len - offset;
+		usz chunk_len = remaining > max_block_len ? max_block_len : remaining;
+		bool is_last = (offset + chunk_len) >= bytes.len;
+
+		block_fn(&comp, bytes[offset:chunk_len], is_last)!;
+		offset += chunk_len;
+	}
+
+	comp.flush_bits()!;
+	return out.array_view();
+}
+
+
+faultdef INVALID_BLOCK_TYPE;
+
+<*
+ Parses a complete DEFLATE stream, handling stored, fixed Huffman, and
+ dynamic Huffman blocks. Blocks are processed sequentially until a block
+ with BFINAL = 1 is encountered or an error is detected. On success, the
+ function returns a newly allocated buffer containing all uncompressed
+ bytes.
+
+ @return? INVALID_BLOCK_TYPE
 *>
 fn char[]? inflate(Allocator allocator, char[] bytes)
 {
@@ -30,133 +128,84 @@ fn char[]? inflate(Allocator allocator, char[] bytes)
 	FlateDecompressor decomp;
 	decomp.init(&byte_reader, &byte_writer);
 
-	uint final, type;
+	uint bfinal, btype;
 	while (true)
 	{
-		final = decomp.getbits(1)!;
-		type  = decomp.getbits(2)!;
+		bfinal = decomp.getbits(1)!;
+		btype  = decomp.getbits(2)!;
 
-		switch(type)
+		switch(btype)
 		{
-			case 0: decomp.store_block()!;
-			case 1: decomp.fixed_block()!;
-			case 2: decomp.dynamic_block()!;
+			case 0: decomp.decode_stored_block()!;
+			case 1: decomp.decode_fixed_block()!;
+			case 2: decomp.decode_dynamic_block()!;
 			default: return INVALID_BLOCK_TYPE~;
 		}
-		if (final) break;
+		if (bfinal) break;
 	}
 	return byte_writer.array_view();
 }
 
-const MAX_BLOCK_SIZE = 65_535;
-
-alias DeflateBlockFn = fn void?(FlateCompressor *c, char[] bytes, bool final);
 
 <*
- Compresses the given input using the DEFLATE algorithm (RFC 1951).
+ Emits a stored (uncompressed) DEFLATE block for the given input.
 
- The input is processed in one or more consecutive blocks. For each block,
- this function calls the user‑supplied `deflate_block` callback, which is
- responsible for:
-   - performing LZ77 tokenization,
-   - emitting one (or more) DEFLATE blocks into the compressor stream, and
-   - setting the BFINAL flag on the last block when `final == true`.
-
- The callback is expected to append encoded DEFLATE data to the provided
- `FlateCompressor` and may emit one or more DEFLATE blocks per call. The `final`
- argument indicates whether this call must produce the final DEFLATE block of
- the stream.
-
- The DEFLATE bitstream is accumulated in the compressor and finally flushed
- into an allocated buffer that is returned to the caller. The caller is
- responsible for freeing this buffer.
-
- Notes:
-   - The `FlateCompressor` instance is initialized once and reused across all
-     blocks so that streaming use cases and a continuous LZ77 history window
-     could be supported.
-
- @param [&inout] allocator: "Allocator for compressed data."
- @param [in] bytes:         "Input data to be compressed."
- @param deflate_block:      "Callback invoked for each logical input block."
- @param max_block_len:      "Maximum number of input bytes to pass to `deflate_block`."
-
- @return "A newly allocated char[] containing the complete DEFLATE stream."
-
+ The function writes a block header with BTYPE=00, aligns to the next
+ byte boundary as required by RFC 1951, then outputs LEN, NLEN and the
+ raw input bytes. If is_last_chunk is true, the block’s BFINAL bit is set.
 *>
-fn char[]? deflate(Allocator allocator, char[] bytes,
-	DeflateBlockFn deflate_block = &dynamic_block,
-	usz max_block_len = MAX_BLOCK_SIZE) => @pool()
+fn void? encode_stored_block(FlateCompressor *c, char[] chunk, bool is_last_chunk)
 {
-	bool final;
-	usz offset, remaining, block_len;
+	uint n = (uint)chunk.len;
 
-	ByteWriter bw;
-	bw.init(allocator);
+	// BFINAL (1 bit), BTYPE=00 (2bits)
+	c.putbits(is_last_chunk ? 1 : 0, 1)!;
+	c.putbits(0b00, 2)!;
 
-	FlateCompressor c;
-	c.init(&bw);
-
-	offset = 0;
-	while (offset < bytes.len)
-	{
-		remaining = bytes.len - offset;
-		block_len = remaining > max_block_len ? max_block_len : remaining;
-		final = (offset + block_len) >= bytes.len;
-		deflate_block(&c, bytes[offset:block_len], final)!;
-		offset += block_len;
-	}
-
-	c.writer.flush()!;
-
-	return bw.array_view();
-}
-
-<*
- Store data uncompressed.
- See RFC 1951 Section 3.2.4
-*>
-fn void? store_block(FlateCompressor *c, char[] bytes, bool final)
-{
-	uint n = (uint)bytes.len;
-
-	// Set non-compressed block header: Either BFINAL (0b1 or 0b0)
-	// and BTYPE (0b00) for non-compressed blocks.
-	c.setbits(final ? 1 : 0, 8)!;
+	// Align to next byte boundary before LEN/NLEN.
+	c.flush_bits()!;
 
 	// Set block length.
-	c.setbits(n, 16)!;
-	c.setbits(~n, 16)!;
+	c.putbits(n, 16)!;
+	c.putbits(~n, 16)!;
 
 	// Write uncompressed bytes.
 	for (usz i = 0; i < n; i++)
 	{
-		c.setbits(bytes[i], 8)!;
+		c.putbits(chunk[i], 8)!;
 	}
 }
 
 <*
- Compression with dynamic Huffman codes.
- See RFC 1951 Section 3.2.7
+ Emits a DEFLATE blocks using the fixed Huffman code trees.
+
+ The function tokenizes the input with LZ77, uses the fixed literal/length
+ and distance trees defined by RFC 1951, writes the fixed-block header,
+ and then encodes all tokens plus an end-of-block symbol. If is_last_chunk
+ is true, the last block written by this function sets BFINAL = 1.
 *>
-fn void? dynamic_block(FlateCompressor *c, char[] bytes, bool final) => @pool()
+fn void? encode_fixed_block(FlateCompressor *c, char[] chunk, bool is_last_chunk) => @pool()
 {
-	Token[] tokens = lz77::tokenize(tmem, bytes);
-	c.build_trees(tokens)!;
-	c.write_dynamic_header(final)!;
+	Token[] tokens = lz77::tokenize(tmem, chunk);
+	c.build_fixed_trees()!;
+	c.write_fixed_header(is_last_chunk)!;
 	c.write_compressed_data(tokens)!;
 	c.write_end_of_block()!;
 }
 
 <*
- Compression with fixed Huffman codes.
- See RFC 1951 Section 3.2.6
+ Emits a DEFLATE blocks using dynamic Huffman coding.
+
+ The function tokenizes the input with LZ77, builds dynamic Huffman trees
+ from the token statistics, writes the dynamic Huffman header, and then
+ encodes all tokens plus an end-of-block symbol. If is_last_chunk is true,
+ the last block written by this function sets BFINAL = 1.
 *>
-fn void? fixed_block(FlateCompressor *c, char[] bytes, bool final) => @pool()
+fn void? encode_dynamic_block(FlateCompressor *c, char[] chunk, bool is_last_chunk) => @pool()
 {
-	Token[] tokens = lz77::tokenize(tmem, bytes);
-	c.build_fixed_trees()!;
-	c.write_fixed_header(final)!;
+	Token[] tokens = lz77::tokenize(tmem, chunk);
+	c.build_trees(tokens)!;
+	c.write_dynamic_header(is_last_chunk)!;
 	c.write_compressed_data(tokens)!;
 	c.write_end_of_block()!;
 }
@@ -168,7 +217,7 @@ import std;
 fn void test_deflate_dynamic() => @pool()
 {
 	char[] bytes = "hello world world hello";
-	char[] comp = flate::deflate(tmem, bytes, &flate::dynamic_block)!!;
+	char[] comp = flate::deflate(tmem, bytes, &flate::encode_dynamic_block)!!;
 	char[] want = x`2de8b1090000080341ace2700a160f011bd70f88cd15d7058ad590ef8d01`;
 	assert(comp == want);
 
@@ -179,7 +228,7 @@ fn void test_deflate_dynamic() => @pool()
 fn void test_flate_fixed() => @pool()
 {
 	char[] bytes = "hello world world hello";
-	char[] fixed = flate::deflate(tmem, bytes, &flate::fixed_block)!!;
+	char[] fixed = flate::deflate(tmem, bytes, &flate::encode_fixed_block)!!;
 	char[] want = x`cb48cdc9c95728cf2fca498192601100`;
 	assert(fixed == want);
 
@@ -190,7 +239,7 @@ fn void test_flate_fixed() => @pool()
 fn void test_flate_store() => @pool()
 {
 	char[] bytes = "hello world";
-	char[] non_comp = flate::deflate(tmem, bytes, &flate::store_block)!!;
+	char[] non_comp = flate::deflate(tmem, bytes, &flate::encode_stored_block)!!;
 	assert(non_comp.len == 1 + 2 + 2 + bytes.len);
 	assert(non_comp[0] == 1);
 	assert(non_comp[5..] == bytes[..]);

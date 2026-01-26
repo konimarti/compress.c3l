@@ -79,12 +79,12 @@ fn void main(String[] args) => @pool()
 	}
 	else
 	{
-		DeflateBlockFn deflate = &flate::dynamic_block;
+		DeflateBlockFn deflate = &flate::encode_dynamic_block;
 		switch (mode)
 		{
-			case STORE:   deflate = &flate::store_block;
-			case FIXED:   deflate = &flate::fixed_block;
-			case DYNAMIC: deflate = &flate::dynamic_block;
+			case STORE:   deflate = &flate::encode_stored_block;
+			case FIXED:   deflate = &flate::encode_fixed_block;
+			case DYNAMIC: deflate = &flate::encode_dynamic_block;
 			case INFLATE: unreachable("internal error");
 		}
 
