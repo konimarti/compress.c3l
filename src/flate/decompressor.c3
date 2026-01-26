@@ -3,31 +3,50 @@
 module compress::flate;
 import std::io;
 
+<*
+ FlateDecompressor holds the bit reader, output writer, and the canonical
+ Huffman metadata for literal/length and distance symbols. It provides methods
+ to decode stored, fixed, and dynamic Huffman blocks from a DEFLATE stream
+ using canonical Huffman codebooks.
+*>
 struct FlateDecompressor
 {
-	FlateReader reader;
-	ByteWriter *writer;
-	HuffOrder ls; // Literal/Length symbols
-	HuffOrder ds; // Distance symbols
+	FlateReader reader; // Bit-level input reader (LSB-first).
+	ByteWriter *writer; // Destination for uncompressed bytes.
+	HuffOrder ls;       // Canonical order for literal/length symbols.
+	HuffOrder ds;       // Canonical order for distance symbols.
 }
 
+<*
+ Initializes a FlateDecompressor with the given input and output streams.
+*>
 fn void FlateDecompressor.init(&self, InStream r, ByteWriter *w)
 {
 	self.reader.init(r);
 	self.writer = w;
 }
 
+<*
+ Resets the decompressor state.
+*>
 fn void FlateDecompressor.free(&self)
 {
 	*self = {};
 }
 
+<*
+ Reads and consumes nbits from the underlying bitstream (LSB-first).
+*>
 fn uint? FlateDecompressor.getbits(&self, uint nbits) @inline
 {
 	return self.reader.read_bits(nbits);
 }
 
 faultdef INVALID_LENGTH;
+<*
+ Decodes a stored (uncompressed) DEFLATE block.
+ @return? INVALID_LENGTH
+*>
 fn void? FlateDecompressor.decode_stored_block(&self)
 {
 	// We already consumed BFINAL and BTYPE in the caller.
@@ -49,6 +68,10 @@ fn void? FlateDecompressor.decode_stored_block(&self)
 	io::copy_to(&lr, self.writer)!;
 }
 
+<*
+ Decodes a block compressed with the fixed Huffman code trees.
+ Rebuilds the fixed literal/length and distance canonical Huffman structures.
+*>
 fn void? FlateDecompressor.decode_fixed_block(&self)
 {
 	self.ls = huff::build_canonical_symbols(
@@ -60,12 +83,23 @@ fn void? FlateDecompressor.decode_fixed_block(&self)
 	return self.inflate_block();
 }
 
+<*
+ Decodes a block compressed with dynamic Huffman coding.
+ Reads the dynamic Huffman tree description from the bitstream, builds the
+ corresponding canonical literal/length and distance codebooks.
+*>
 fn void? FlateDecompressor.decode_dynamic_block(&self)
 {
 	self.decode_trees()!;
 	return self.inflate_block();
 }
 
+<*
+ Parses and builds the dynamic Huffman trees.
+ Reads HLIT, HDIST, and HCLEN, decodes the code-length Huffman tree, then uses
+ it to reconstruct the full set of literal/length and distance code lengths.
+ From these, canonical Huffman orders are constructed.
+*>
 fn void? FlateDecompressor.decode_trees(&self)
 {
 	char[288 + 32] lengths;
@@ -85,8 +119,8 @@ fn void? FlateDecompressor.decode_trees(&self)
 
 	// Build code length tree.
 	HuffOrder code_length = huff::build_canonical_symbols(lengths[:19]);
-
 	lengths[:19] = 0;
+
 	// Decode code length for the dynamic trees.
 	for (uint num = 0; num < nlit + ndist;)
 	{
@@ -111,6 +145,14 @@ fn void? FlateDecompressor.decode_trees(&self)
 	self.ds = huff::build_canonical_symbols(lengths[nlit:ndist]);
 }
 
+<*
+ Inflates a single compressed block using current Huffman metadata.
+ Uses the literal/length (ls) and distance (ds) canonical information to
+ decode symbols from the bitstream. Literals are written directly to the
+ output; length/distance pairs cause bytes to be copied from already
+ decompressed output  until the end-of-block symbol is reached.
+ Based on the tinf implementation.
+*>
 fn void? FlateDecompressor.inflate_block(&self)
 {
 	uint length, off;
@@ -148,13 +190,21 @@ fn void? FlateDecompressor.inflate_block(&self)
 	}
 }
 
+<*
+ Decodes a single Huffman-coded symbol using canonical metadata.
+ Interprets bits from the input as a canonical Huffman codeword of
+ increasing length, using counts and symbols from the given HuffOrder.
+
+ @return "Returns the decoded symbol index"
+ @return? NOT_FOUND
+*>
 fn int? FlateDecompressor.decode_symbol(&self, HuffOrder *h)
 {
 	int code, first, count, index;
 	code = 0; first = 0; index = 0;
 	for (int len = 1; len <= huff::MAX_CODE_BITS; len++)
 	{
-		code = code << 1 + self.getbits(1)!;
+		code = (code << 1) | self.getbits(1)!;
 		count = h.counts[len];
 		if (code - count < first)
 		{

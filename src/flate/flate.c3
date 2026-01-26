@@ -55,10 +55,10 @@ const MAX_BLOCK_SIZE = 65_535;
 alias DeflateBlockFn = fn void?(FlateCompressor *c, char[] input_chunk, bool is_last_chunk);
 
 <*
- Low-level DEFLATE compressor with pluggable block strategy.
+ Low-level deflate() with a pluggable block strategy.
 
- The input is processed in one or more consecutive chunks. For each chunk,
- this function calls the user-supplied block_fn, which is responsible for:
+ The input is processed in one or more chunks. For each chunk, this function
+ calls the user-supplied block_fn, which is responsible for:
    - performing LZ77 tokenization as needed,
    - emitting a DEFLATE blocks into the FlateCompressor, and
    - ensuring the final block it emits has BFINAL = 1 when is_last_chunk
@@ -80,8 +80,7 @@ alias DeflateBlockFn = fn void?(FlateCompressor *c, char[] input_chunk, bool is_
 
  @return "A newly allocated char[] containing the complete DEFLATE stream."
 *>
-fn char[]? deflate(Allocator allocator, char[] bytes,
-	DeflateBlockFn block_fn = &dynamic_block,
+fn char[]? deflate(Allocator allocator, char[] bytes, DeflateBlockFn block_fn = &dynamic_block,
 	usz max_block_len = MAX_BLOCK_SIZE) => @pool()
 {
 	ByteWriter out;
@@ -105,7 +104,6 @@ fn char[]? deflate(Allocator allocator, char[] bytes,
 	return out.array_view();
 }
 
-
 faultdef INVALID_BLOCK_TYPE;
 
 <*
@@ -115,6 +113,8 @@ faultdef INVALID_BLOCK_TYPE;
  function returns a newly allocated buffer containing all uncompressed
  bytes.
 
+ @param [&inout] allocator : "Allocator for uncompressed data."
+ @param [in] bytes         : "Input data to be compressed."
  @return? INVALID_BLOCK_TYPE
 *>
 fn char[]? inflate(Allocator allocator, char[] bytes)
@@ -129,7 +129,7 @@ fn char[]? inflate(Allocator allocator, char[] bytes)
 	decomp.init(&byte_reader, &byte_writer);
 
 	uint bfinal, btype;
-	while (true)
+	do
 	{
 		bfinal = decomp.getbits(1)!;
 		btype  = decomp.getbits(2)!;
@@ -141,8 +141,7 @@ fn char[]? inflate(Allocator allocator, char[] bytes)
 			case 2: decomp.decode_dynamic_block()!;
 			default: return INVALID_BLOCK_TYPE~;
 		}
-		if (bfinal) break;
-	}
+	} while (!bfinal);
 	return byte_writer.array_view();
 }
 
