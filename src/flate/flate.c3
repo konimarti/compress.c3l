@@ -158,8 +158,7 @@ fn void? encode_stored_block(FlateCompressor *c, char[] chunk, bool is_last_chun
 	uint n = (uint)chunk.len;
 
 	// BFINAL (1 bit), BTYPE=00 (2bits)
-	c.putbits(is_last_chunk ? 1 : 0, 1)!;
-	c.putbits(0b00, 2)!;
+	c.write_block_header(is_last_chunk ? 1 : 0, 0b00)!;
 
 	// Align to next byte boundary before LEN/NLEN.
 	c.flush_bits()!;
@@ -187,7 +186,7 @@ fn void? encode_fixed_block(FlateCompressor *c, char[] chunk, bool is_last_chunk
 {
 	Token[] tokens = lz77::tokenize(tmem, chunk);
 	c.build_fixed_trees()!;
-	c.write_fixed_header(is_last_chunk)!;
+	c.write_block_header(is_last_chunk ? 1 : 0, 0b01)!;
 	c.write_compressed_data(tokens)!;
 	c.write_end_of_block()!;
 }

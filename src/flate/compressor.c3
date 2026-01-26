@@ -5,28 +5,51 @@ import std::collections::list, std::io;
 
 const END_OF_BLOCK = 256;
 
+<*
+ FlateCompressor owns the bit writer and the canonical Huffman codebooks for
+ literal/length and distance symbols. It provides methods to build Huffman
+ trees from token statistics and to emit block headers and compressed data into
+ the output stream.
+*>
 struct FlateCompressor
 {
-	FlateWriter writer;
-	HuffCodes lt; // Literal/Length tree
-	HuffCodes dt; // Distance tree
+	FlateWriter writer; // Bit-level output writer (LSB-first).
+	HuffCodes lt;       // Literal/Length Huffman codes.
+	HuffCodes dt;       // Distance Huffman codes.
 }
 
+<*
+ Initializes a FlateCompressor with the given output stream.
+*>
 fn void FlateCompressor.init(&self, OutStream wrapped)
 {
 	self.writer.init(wrapped);
 }
 
+<*
+ Writes nbits bits to the bitstream.
+*>
 fn void? FlateCompressor.putbits(&self, uint bits, uint nbits) @inline
 {
 	self.writer.write_bits(bits, nbits)!;
 }
 
+<*
+ Flushes all remaining bits from the internal bit buffer.
+ Writes any partial byte with zero padding in the unused high bits. Typically
+ called once after all blocks have been emitted to finish the bitstream.
+*>
 fn void? FlateCompressor.flush_bits(&self) @inline
 {
 	self.writer.flush()!;
 }
 
+<*
+ Builds dynamic Huffman codebooks from LZ77 tokens.
+ Computes literal/length and distance symbol frequencies from the supplied
+ tokens, adds the end-of-block marker, and generates canonical Huffman codes
+ for both alphabets.
+*>
 fn void? FlateCompressor.build_trees(&self, Token[] tokens)
 {
 	// Calculate literal, length and distance frequencies.
@@ -64,7 +87,14 @@ fn void? FlateCompressor.build_trees(&self, Token[] tokens)
 	self.dt = huff::build_codes_from_freqs(&dt_freqs)!;
 }
 
-fn void? FlateCompressor.write_dynamic_header(&self, bool final = true) => @pool()
+<*
+ Writes the dynamic Huffman block header.
+ Encodes HLIT, HDIST, and HCLEN, run-length encodes the literal/length
+ and distance code lengths, builds the code-length Huffman tree, and
+ writes the corresponding header and encoded code-length sequence to
+ the bitstream. If final is true, BFINAL is set on this block.
+*>
+fn void? FlateCompressor.write_dynamic_header(&self, bool bfinal = true) => @pool()
 {
 	char sym;
 	uint i, hlit, hdist, hclen;
@@ -79,10 +109,9 @@ fn void? FlateCompressor.write_dynamic_header(&self, bool final = true) => @pool
 
 	hclen = encoder.max_sym + 1 - 4;
 
-	// Write dynamic block header.
+	// Write block header.
 	// Push BFINAL (0b1 or 0b0) and BTYPE (0b10).
-	self.putbits(final ? 1 : 0, 1)!;
-	self.putbits(0b10, 2)!;
+	self.write_block_header(bfinal ? 1 : 0, 0b10)!;
 
 	// Write 5 bits HLIT (# of literal/length codes - 257)
 	assert(hlit <= 31);
@@ -98,15 +127,15 @@ fn void? FlateCompressor.write_dynamic_header(&self, bool final = true) => @pool
 
 	for (i = 0; i < hclen + 4; i++)
 	{
-		self.putbits(encoder.ct.blen[hc_order[i]], 3)!;
+		self.putbits(encoder.cl_codes.blen[hc_order[i]], 3)!;
 	}
 
 	// Write encoded code length.
-	char[] enc = encoder.enc.array_view();
+	char[] enc = encoder.encoded.array_view();
 	for (i = 0; i < enc.len; )
 	{
 		sym = enc[i++];
-		self.putbits(encoder.ct.codes[sym], encoder.ct.blen[sym])!;
+		self.putbits(encoder.cl_codes.codes[sym], encoder.cl_codes.blen[sym])!;
 		switch (sym)
 		{
 			case 16: self.putbits(enc[i++], 2)!;
@@ -117,6 +146,11 @@ fn void? FlateCompressor.write_dynamic_header(&self, bool final = true) => @pool
 
 }
 
+<*
+ Builds the fixed Huffman codebooks.
+ Initializes lt and dt with the canonical fixed literal/length and
+ distance codes specified in RFC 1951.
+*>
 fn void? FlateCompressor.build_fixed_trees(&self)
 {
 	self.lt = huff::build_codes_from_lengths(
@@ -126,15 +160,22 @@ fn void? FlateCompressor.build_fixed_trees(&self)
 		huff::FIXED_DISTANCE_CODE_LENGTHS)!;
 }
 
-fn void? FlateCompressor.write_fixed_header(&self, bool final = true) => @pool()
+<*
+ Writes a block header given BFINAL and BTYPE.
+*>
+fn void? FlateCompressor.write_block_header(&self, uint bfinal, uint btype) @inline
 {
-	// Write fixed block header.
-	// Push BFINAL (0b1 or 0b0) and BTYPE (0b01).
-	self.putbits(final ? 1 : 0, 1)!;
-	self.putbits(0b01, 2)!;
+	self.putbits(bfinal, 1)!;
+	self.putbits(btype, 2)!;
 }
 
 
+<*
+ Encodes all LZ77 tokens for the current block using lt and dt.
+ Literals are encoded directly with the literal/length tree; matches
+ are mapped to length and distance codes plus any required extra bits,
+ and written using the corresponding Huffman codebooks.
+*>
 fn void? FlateCompressor.write_compressed_data(&self, Token[] tokens)
 {
 	foreach (token: tokens)
@@ -148,6 +189,9 @@ fn void? FlateCompressor.write_compressed_data(&self, Token[] tokens)
 	}
 }
 
+<*
+ Writes a distance Huffman code for the given distance slot.
+*>
 fn void? FlateCompressor.write_distance(&self, usz l) @inline
 {
 	char len = self.dt.blen[l];
@@ -155,6 +199,9 @@ fn void? FlateCompressor.write_distance(&self, usz l) @inline
 	self.putbits(code, len)!;
 }
 
+<*
+ Writes a literal/length Huffman code for the given symbol.
+*>
 fn void? FlateCompressor.write_literal(&self, usz c) @inline
 {
 	char len = self.lt.blen[c];
@@ -162,11 +209,17 @@ fn void? FlateCompressor.write_literal(&self, usz c) @inline
 	self.putbits(code, len)!;
 }
 
+<*
+ Writes the end-of-block symbol for the current block.
+*>
 fn void? FlateCompressor.write_end_of_block(&self) @inline
 {
 	self.write_literal(END_OF_BLOCK)!;
 }
 
+<*
+ Writes a match (length, distance) pair to the stream.
+*>
 fn void? FlateCompressor.write_match(&self, uint len, uint dist)
 {
 	usz index;
@@ -240,27 +293,34 @@ fn usz huff_index_lookup(uint[] base, uint v) @inline
 	return i;
 }
 
+<*
+ CodeLengthEncoder takes the literal/length and distance code-length sequences,
+ run-length encodes them using symbols 0–18, and computes a canonical Huffman
+ codebook for those symbols. The encoded sequence is stored in encoded; the
+ resulting codebook and highest used symbol are stored in cl_codes and max_sym.
+*>
 struct CodeLengthEncoder
 {
-	ByteWriter enc;
-	HuffCodes ct;
-	int max_sym;
+	ByteWriter encoded; // Encoded code-length stream (symbols 0–18 plus extra bytes).
+	HuffCodes cl_codes; // Canonical Huffman codes for the code-length alphabet.
+	int max_sym;        // Highest hc_order[] symbol used in ct.
 }
 
 fn void CodeLengthEncoder.init(&self, Allocator allocator)
 {
-	self.enc.init(allocator);
-	self.ct = {};
+	self.encoded.init(allocator);
+	self.cl_codes = {};
 	self.max_sym = -1;
 }
 
 fn void CodeLengthEncoder.free(&self)
 {
-	(void)self.enc.destroy();
+	(void)self.encoded.destroy();
 }
 
 <*
- Encode literal/length and distance bit lengths and return a Huffman tree.
+ Encodes literal/length and distance code lengths and builds the code-length
+ tree.
 *>
 fn void? CodeLengthEncoder.encode(&self, char[] lt_len, char[] dt_len)
 {
@@ -269,7 +329,7 @@ fn void? CodeLengthEncoder.encode(&self, char[] lt_len, char[] dt_len)
 	uint[19] freqs;
 
 	n = lt_len.len + dt_len.len;
-	self.enc.ensure_capacity(n)!;
+	self.encoded.ensure_capacity(n)!;
 	@pool()
 	{
 		// Combine literal/length and distance code lengths.
@@ -278,11 +338,11 @@ fn void? CodeLengthEncoder.encode(&self, char[] lt_len, char[] dt_len)
 		lengths[lt_len.len:dt_len.len] = dt_len[:dt_len.len];
 
 		// Encode the code lengths.
-		encode_code_lengths(&self.enc, lengths)!;
+		encode_code_lengths(&self.encoded, lengths)!;
 	};
 
 	// Calculate frequencies of the encoded code lengths.
-	char[] enc = self.enc.array_view();
+	char[] enc = self.encoded.array_view();
 	self.max_sym = -1;
 	i = 0;
 	while (i < enc.len)
@@ -295,9 +355,20 @@ fn void? CodeLengthEncoder.encode(&self, char[] lt_len, char[] dt_len)
 
 	assert(self.max_sym >= 0);
 
-	self.ct = huff::build_codes_from_freqs(freqs[..], 5)!;
+	self.cl_codes = huff::build_codes_from_freqs(freqs[..], 5)!;
 }
 
+<*
+ Run-length encodes a sequence of code lengths into code-length symbols.
+
+ Takes a sequence of code lengths (0–MAX_CODE_BITS) and emits a compact
+ representation into enc using the code-length alphabet (RFC 1951):
+   - literal length values 0–15 for short runs,
+   - symbol 16 for repeated non-zero lengths (3–6 repeats),
+   - symbol 17 for short zero runs (3–10 zeros),
+   - symbol 18 for long zero runs (11–138 zeros).
+ Extra repeat counts for symbols 16–18 are emitted as following bytes.
+*>
 fn void? encode_code_lengths(ByteWriter *enc, char[] seq) @private => @pool()
 {
 	usz i, r, rem;
