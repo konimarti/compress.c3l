@@ -3,12 +3,39 @@
 module compress::flate;
 import std::collections::list, std::io;
 
+struct HuffSym
+{
+	uint[huff::MAX_BITS] counts; // Number of symbols of each lengths.
+	uint[288] symbols;           // Canonically ordered symbols.
+}
+
+fn HuffSym gen_symbols(char[] lengths)
+{
+	uint[huff::MAX_BITS+1] offs;
+
+	HuffSym h = {};
+	foreach (len : lengths) h.counts[len]++;
+	if (h.counts[0] == lengths.len) return h; // No codes.
+
+	offs[1] = 0;
+	for (int len = 1; len < huff::MAX_BITS; len++)
+	{
+		offs[len+1] = offs[len] + h.counts[len];
+	}
+
+	foreach (int sym, len: lengths)
+	{
+		if (len != 0) h.symbols[offs[len]++] = sym;
+	}
+	return h;
+}
+
 struct HuffDecompressor
 {
 	bitio::BitReader{char} reader;
 	ByteWriter *writer;
-	HuffTree lt; // Literal/Length tree
-	HuffTree dt; // Distance tree
+	HuffSym ls; // Literal/Length symbols
+	HuffSym ds; // Distance symbols
 }
 
 fn void HuffDecompressor.init(&self, InStream r, ByteWriter *w)
@@ -54,7 +81,15 @@ fn void? HuffDecompressor.store_block(&self)
 
 fn void? HuffDecompressor.fixed_block(&self)
 {
-	huff::generate_fixed_trees(&self.lt, &self.dt)!;
+	self.ls = gen_symbols({
+		[  0..143] = 8,
+		[144..255] = 9,
+		[256..279] = 7,
+		[280..287] = 8,
+	});
+
+	self.ds = gen_symbols({[0..31] = 5});
+
 	return self.inflate_block();
 }
 
@@ -82,8 +117,7 @@ fn void? HuffDecompressor.decode_trees(&self)
 	}
 
 	// Build code length tree.
-	HuffTree code_length =
-		huff::generate_from_lengths(lengths[:19])!;
+	HuffSym code_length = gen_symbols(lengths[:19]);
 
 	lengths[:19] = 0;
 	// Decode code length for the dynamic trees.
@@ -106,14 +140,14 @@ fn void? HuffDecompressor.decode_trees(&self)
 		while (len--) lengths[num++] = (char)sym;
 	}
 
-	self.lt = huff::generate_from_lengths(lengths[0:nlit])!;
-	self.dt = huff::generate_from_lengths(lengths[nlit:ndist])!;
+	self.ls = gen_symbols(lengths[0:nlit]);
+	self.ds = gen_symbols(lengths[nlit:ndist]);
 }
 
 fn void? HuffDecompressor.inflate_block(&self)
 {
 	uint length, off;
-	while (try sym = self.decode_symbol(&self.lt))
+	while (try sym = self.decode_symbol(&self.ls))
 	{
 		if (sym < END_OF_BLOCK)
 		{
@@ -130,7 +164,7 @@ fn void? HuffDecompressor.inflate_block(&self)
 			length += self.getbits(len_extra[sym])!;
 		}
 
-		if (try dist = self.decode_symbol(&self.dt))
+		if (try dist = self.decode_symbol(&self.ds))
 		{
 			off = dist_base[dist];
 			if (dist_extra[dist])
@@ -147,19 +181,23 @@ fn void? HuffDecompressor.inflate_block(&self)
 	}
 }
 
-fn int? HuffDecompressor.decode_symbol(&self, HuffTree *tree)
+fn int? HuffDecompressor.decode_symbol(&self, HuffSym *h)
 {
-	uint code = 0;
+	int code, first, count, index;
+	code = 0; first = 0; index = 0;
 	for (int len = 1; len <= huff::MAX_BITS; len++)
 	{
 		code = code << 1 + self.getbits(1)!;
-		foreach (int i, bits: tree.blen)
+		count = h.counts[len];
+		if (code - count < first)
 		{
-			if (bits != len) continue;
-			if (code != tree.codes[i]) continue;
-			return i;
+			return h.symbols[index + (code - first)];
 		}
+		index += count;
+		first += count;
+		first <<= 1;
 	}
 	return NOT_FOUND~;
 }
+
 

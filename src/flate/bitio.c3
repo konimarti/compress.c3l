@@ -127,7 +127,7 @@ fn uint? BitReader.peek_bits(&self, isz num_bits)
 	while (self.nbits < num_bits)
 	{
 		// New bits are appended on the left
-		char c = self.reader.read_byte() ?? 0;
+		char c = self.reader.read_byte()!;
 		self.bits |= (ulong)c << self.nbits;
 		self.nbits += 8;
 	}
