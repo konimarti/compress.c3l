@@ -27,7 +27,7 @@ fn char[]? inflate(Allocator allocator, char[] bytes)
 	ByteWriter byte_writer;
 	byte_writer.init(allocator);
 
-	HuffDecompressor decomp;
+	FlateDecompressor decomp;
 	decomp.init(&byte_reader, &byte_writer);
 
 	uint final, type;
@@ -50,7 +50,7 @@ fn char[]? inflate(Allocator allocator, char[] bytes)
 
 const MAX_BLOCK_SIZE = 65_535;
 
-alias DeflateBlockFn = fn void?(HuffCompressor *c, char[] bytes, bool final);
+alias DeflateBlockFn = fn void?(FlateCompressor *c, char[] bytes, bool final);
 
 <*
  Compresses the given input using the DEFLATE algorithm (RFC 1951).
@@ -63,7 +63,7 @@ alias DeflateBlockFn = fn void?(HuffCompressor *c, char[] bytes, bool final);
    - setting the BFINAL flag on the last block when `final == true`.
 
  The callback is expected to append encoded DEFLATE data to the provided
- `HuffCompressor` and may emit one or more DEFLATE blocks per call. The `final`
+ `FlateCompressor` and may emit one or more DEFLATE blocks per call. The `final`
  argument indicates whether this call must produce the final DEFLATE block of
  the stream.
 
@@ -72,7 +72,7 @@ alias DeflateBlockFn = fn void?(HuffCompressor *c, char[] bytes, bool final);
  responsible for freeing this buffer.
 
  Notes:
-   - The `HuffCompressor` instance is initialized once and reused across all
+   - The `FlateCompressor` instance is initialized once and reused across all
      blocks so that streaming use cases and a continuous LZ77 history window
      could be supported.
 
@@ -91,8 +91,11 @@ fn char[]? deflate(Allocator allocator, char[] bytes,
 	bool final;
 	usz offset, remaining, block_len;
 
-	HuffCompressor c;
-	c.init(tmem);
+	ByteWriter bw;
+	bw.init(allocator);
+
+	FlateCompressor c;
+	c.init(&bw);
 
 	offset = 0;
 	while (offset < bytes.len)
@@ -104,29 +107,31 @@ fn char[]? deflate(Allocator allocator, char[] bytes,
 		offset += block_len;
 	}
 
-	return c.stream.flush(allocator, true)!;
+	c.writer.flush()!;
+
+	return bw.array_view();
 }
 
 <*
  Store data uncompressed.
  See RFC 1951 Section 3.2.4
 *>
-fn void? store_block(HuffCompressor *c, char[] bytes, bool final)
+fn void? store_block(FlateCompressor *c, char[] bytes, bool final)
 {
 	uint n = (uint)bytes.len;
 
 	// Set non-compressed block header: Either BFINAL (0b1 or 0b0)
 	// and BTYPE (0b00) for non-compressed blocks.
-	c.stream.write(final ? 1 : 0, 8);
+	c.setbits(final ? 1 : 0, 8)!;
 
 	// Set block length.
-	c.stream.write(n, 16);
-	c.stream.write(~n, 16);
+	c.setbits(n, 16)!;
+	c.setbits(~n, 16)!;
 
 	// Write uncompressed bytes.
 	for (usz i = 0; i < n; i++)
 	{
-		c.stream.write(bytes[i], 8);
+		c.setbits(bytes[i], 8)!;
 	}
 }
 
@@ -134,26 +139,26 @@ fn void? store_block(HuffCompressor *c, char[] bytes, bool final)
  Compression with dynamic Huffman codes.
  See RFC 1951 Section 3.2.7
 *>
-fn void? dynamic_block(HuffCompressor *c, char[] bytes, bool final) => @pool()
+fn void? dynamic_block(FlateCompressor *c, char[] bytes, bool final) => @pool()
 {
 	Token[] tokens = lz77::tokenize(tmem, bytes);
 	c.build_trees(tokens)!;
 	c.write_dynamic_header(final)!;
 	c.write_compressed_data(tokens)!;
-	c.write_end_of_block();
+	c.write_end_of_block()!;
 }
 
 <*
  Compression with fixed Huffman codes.
  See RFC 1951 Section 3.2.6
 *>
-fn void? fixed_block(HuffCompressor *c, char[] bytes, bool final) => @pool()
+fn void? fixed_block(FlateCompressor *c, char[] bytes, bool final) => @pool()
 {
 	Token[] tokens = lz77::tokenize(tmem, bytes);
 	c.build_fixed_trees()!;
 	c.write_fixed_header(final)!;
 	c.write_compressed_data(tokens)!;
-	c.write_end_of_block();
+	c.write_end_of_block()!;
 }
 
 module compress::deflate::test @test;

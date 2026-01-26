@@ -30,32 +30,32 @@ fn HuffSym gen_symbols(char[] lengths)
 	return h;
 }
 
-struct HuffDecompressor
+struct FlateDecompressor
 {
-	bitio::BitReader{char} reader;
+	FlateReader reader;
 	ByteWriter *writer;
 	HuffSym ls; // Literal/Length symbols
 	HuffSym ds; // Distance symbols
 }
 
-fn void HuffDecompressor.init(&self, InStream r, ByteWriter *w)
+fn void FlateDecompressor.init(&self, InStream r, ByteWriter *w)
 {
 	self.reader.init(r);
 	self.writer = w;
 }
 
-fn void HuffDecompressor.free(&self)
+fn void FlateDecompressor.free(&self)
 {
 	*self = {};
 }
 
-fn uint? HuffDecompressor.getbits(&self, isz nbits) @inline
+fn uint? FlateDecompressor.getbits(&self, uint nbits) @inline
 {
 	return self.reader.read_bits(nbits);
 }
 
 faultdef INVALID_LENGTH;
-fn void? HuffDecompressor.store_block(&self)
+fn void? FlateDecompressor.store_block(&self)
 {
 	self.getbits(5)!;
 
@@ -74,7 +74,7 @@ fn void? HuffDecompressor.store_block(&self)
 	io::copy_to(&lr, self.writer)!;
 }
 
-fn void? HuffDecompressor.fixed_block(&self)
+fn void? FlateDecompressor.fixed_block(&self)
 {
 	self.ls = gen_symbols({
 		[  0..143] = 8,
@@ -88,13 +88,13 @@ fn void? HuffDecompressor.fixed_block(&self)
 	return self.inflate_block();
 }
 
-fn void? HuffDecompressor.dynamic_block(&self)
+fn void? FlateDecompressor.dynamic_block(&self)
 {
 	self.decode_trees()!;
 	return self.inflate_block();
 }
 
-fn void? HuffDecompressor.decode_trees(&self)
+fn void? FlateDecompressor.decode_trees(&self)
 {
 	char[288 + 32] lengths;
 	uint nlit, ndist, nclen;
@@ -139,7 +139,7 @@ fn void? HuffDecompressor.decode_trees(&self)
 	self.ds = gen_symbols(lengths[nlit:ndist]);
 }
 
-fn void? HuffDecompressor.inflate_block(&self)
+fn void? FlateDecompressor.inflate_block(&self)
 {
 	uint length, off;
 	while (try sym = self.decode_symbol(&self.ls))
@@ -176,7 +176,7 @@ fn void? HuffDecompressor.inflate_block(&self)
 	}
 }
 
-fn int? HuffDecompressor.decode_symbol(&self, HuffSym *h)
+fn int? FlateDecompressor.decode_symbol(&self, HuffSym *h)
 {
 	int code, first, count, index;
 	code = 0; first = 0; index = 0;

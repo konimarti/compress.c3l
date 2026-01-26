@@ -1,23 +1,28 @@
 // Copyright (c) 2026 Koni Marti. All rights reserved.
 // Use of this source code is governed by the MIT license.
 module compress::flate;
-import std::collections::list;
+import std::collections::list, std::io;
 
 const END_OF_BLOCK = 256;
 
-struct HuffCompressor
+struct FlateCompressor
 {
-	bitio::BitWriter{char} stream;
+	FlateWriter writer;
 	HuffTree lt; // Literal/Length tree
 	HuffTree dt; // Distance tree
 }
 
-fn void HuffCompressor.init(&self, Allocator allocator)
+fn void FlateCompressor.init(&self, OutStream wrapped)
 {
-	self.stream.init(allocator);
+	self.writer.init(wrapped);
 }
 
-fn void? HuffCompressor.build_trees(&self, Token[] tokens)
+fn void? FlateCompressor.setbits(&self, uint bits, uint nbits) @inline
+{
+	self.writer.write_bits(bits, nbits)!;
+}
+
+fn void? FlateCompressor.build_trees(&self, Token[] tokens)
 {
 	// Calculate literal, length and distance frequencies.
 	uint[288] lt_freqs;
@@ -56,20 +61,21 @@ fn void? HuffCompressor.build_trees(&self, Token[] tokens)
 
 struct CodeLengthEncoder
 {
-	Allocator allocator;
-	char[] enc;
+	ByteWriter enc;
 	HuffTree ct;
 	int max_sym;
 }
 
 fn void CodeLengthEncoder.init(&self, Allocator allocator)
 {
-	*self = { .allocator = allocator, .ct = {}, .max_sym = -1 };
+	self.enc.init(allocator);
+	self.ct = {};
+	self.max_sym = -1;
 }
 
 fn void CodeLengthEncoder.free(&self)
 {
-	if (self.enc.len) allocator::free(self.allocator, self.enc);
+	(void)self.enc.destroy();
 }
 
 <*
@@ -82,24 +88,25 @@ fn void? CodeLengthEncoder.encode(&self, char[] lt_len, char[] dt_len)
 	uint[19] freqs;
 
 	n = lt_len.len + dt_len.len;
-
+	self.enc.ensure_capacity(n)!;
 	@pool()
 	{
 		// Combine literal/length and distance code lengths.
 		char[] lengths = mem::temp_array(char, n);
-		foreach (s: lt_len) lengths[i++] = s;
-		foreach (s: dt_len) lengths[i++] = s;
+		lengths[:lt_len.len] = lt_len[:lt_len.len];
+		lengths[lt_len.len:dt_len.len] = dt_len[:dt_len.len];
 
 		// Encode the code lengths.
-		self.enc = encode_code_lengths(self.allocator, lengths);
+		encode_code_lengths(&self.enc, lengths)!;
 	};
 
 	// Calculate frequencies of the encoded code lengths.
+	char[] enc = self.enc.array_view();
 	self.max_sym = -1;
 	i = 0;
-	while (i < self.enc.len)
+	while (i < enc.len)
 	{
-		sym = self.enc[i++];
+		sym = enc[i++];
 		if (sym > 15) i++; // Skip extra bits for symbols 16,17,18
 		if (hc_order[sym] > self.max_sym) self.max_sym = hc_order[sym];
 		freqs[sym]++;
@@ -110,11 +117,8 @@ fn void? CodeLengthEncoder.encode(&self, char[] lt_len, char[] dt_len)
 	self.ct = huff::generate(freqs[..], 5, reverse: true)!;
 }
 
-fn char[] encode_code_lengths(Allocator allocator, char[] seq) @private => @pool()
+fn void? encode_code_lengths(ByteWriter *enc, char[] seq) @private => @pool()
 {
-	List{char} enc;
-	enc.tinit(seq.len);
-
 	usz i, r, rem;
 	while (i < seq.len)
 	{
@@ -128,36 +132,35 @@ fn char[] encode_code_lengths(Allocator allocator, char[] seq) @private => @pool
 		{
 			case (sym != 0 && r <= 3) || (sym == 0 && r < 3):
 				rem = r;
-				while (rem--) enc.push(sym);
+				while (rem--) enc.write_byte(sym)!;
 				i += r;
 			case sym != 0 && r > 3:
-				enc.push(sym);
+				enc.write_byte(sym)!;
 				i++; r--;
 				while (r > 2)
 				{
 					rem = r > 6 ? 6 : r;
-					enc.push(16);
-					enc.push((char)rem-3);
+					enc.write_byte(16)!;
+					enc.write_byte((char)rem-3)!;
 					r -= rem;
 					i += rem;
 				}
 			case sym == 0 && r >= 3 && r < 11:
-				enc.push(17);
-				enc.push((char)r-3);
+				enc.write_byte(17)!;
+				enc.write_byte((char)r-3)!;
 				i += r;
 			case sym == 0 && r >= 11:
 				while (r > 10)
 				{
 					rem = r > 138 ? 138 : r;
-					enc.push(18);
-					enc.push((char)rem-11);
+					enc.write_byte(18)!;
+					enc.write_byte((char)rem-11)!;
 					r -= rem;
 					i += rem;
 				}
 			default: unreachable("internal error");
 		}
 	}
-	return enc.to_array(allocator);
 }
 
 struct CodeLengthTestCase @private
@@ -229,7 +232,10 @@ fn void test_encode_code_lengths() @test => @pool()
 
 	foreach (j, test: tests)
 	{
-		char[] enc = encode_code_lengths(tmem, test.input);
+		ByteWriter bw;
+		bw.tinit();
+		encode_code_lengths(&bw, test.input)!!;
+		char[] enc = bw.array_view();
 		test::eq(enc.len, test.want.len);
 		foreach (i, got: enc)
 		{
@@ -238,7 +244,7 @@ fn void test_encode_code_lengths() @test => @pool()
 	}
 }
 
-fn void? HuffCompressor.write_dynamic_header(&self, bool final = true) => @pool()
+fn void? FlateCompressor.write_dynamic_header(&self, bool final = true) => @pool()
 {
 	char sym;
 	uint i, hlit, hdist, hclen;
@@ -255,109 +261,110 @@ fn void? HuffCompressor.write_dynamic_header(&self, bool final = true) => @pool(
 
 	// Write dynamic block header.
 	// Push BFINAL (0b1 or 0b0) and BTYPE (0b10).
-	self.stream.write(final ? 1 : 0, 1);
-	self.stream.write(0b10, 2);
+	self.setbits(final ? 1 : 0, 1)!;
+	self.setbits(0b10, 2)!;
 
 	// Write 5 bits HLIT (# of literal/length codes - 257)
 	assert(hlit <= 31);
-	self.stream.write(hlit, 5);
+	self.setbits(hlit, 5)!;
 
 	// Write 5 bits HDIST (# of distance codes - 1)
 	assert(hdist+1 > 0 && hdist < 30);
-	self.stream.write(hdist, 5);
+	self.setbits(hdist, 5)!;
 
 	// Push 4 bits HCLEN (# of code length codes - 4)
 	assert(hclen >= 4);
-	self.stream.write(hclen, 4);
+	self.setbits(hclen, 4)!;
 
 	for (i = 0; i < hclen + 4; i++)
 	{
-		self.stream.write(encoder.ct.blen[hc_order[i]], 3);
+		self.setbits(encoder.ct.blen[hc_order[i]], 3)!;
 	}
 
 	// Write encoded code length.
-	for (i = 0; i < encoder.enc.len; )
+	char[] enc = encoder.enc.array_view();
+	for (i = 0; i < enc.len; )
 	{
-		sym = encoder.enc[i++];
-		self.stream.write(encoder.ct.codes[sym], encoder.ct.blen[sym]);
+		sym = enc[i++];
+		self.setbits(encoder.ct.codes[sym], encoder.ct.blen[sym])!;
 		switch (sym)
 		{
-			case 16: self.stream.write(encoder.enc[i++], 2);
-			case 17: self.stream.write(encoder.enc[i++], 3);
-			case 18: self.stream.write(encoder.enc[i++], 7);
+			case 16: self.setbits(enc[i++], 2)!;
+			case 17: self.setbits(enc[i++], 3)!;
+			case 18: self.setbits(enc[i++], 7)!;
 		}
 	}
 
 }
 
-fn void? HuffCompressor.build_fixed_trees(&self)
+fn void? FlateCompressor.build_fixed_trees(&self)
 {
 	huff::generate_fixed_trees(&self.lt, &self.dt, reverse: true)!;
 }
 
-fn void? HuffCompressor.write_fixed_header(&self, bool final = true) => @pool()
+fn void? FlateCompressor.write_fixed_header(&self, bool final = true) => @pool()
 {
 	// Write fixed block header.
 	// Push BFINAL (0b1 or 0b0) and BTYPE (0b01).
-	self.stream.write(final ? 1 : 0, 1);
-	self.stream.write(0b01, 2);
+	self.setbits(final ? 1 : 0, 1)!;
+	self.setbits(0b01, 2)!;
 }
 
 
-fn void? HuffCompressor.write_compressed_data(&self, Token[] tokens)
+fn void? FlateCompressor.write_compressed_data(&self, Token[] tokens)
 {
 	foreach (token: tokens)
 	{
 		switch (token.type)
 		{
-			case LITERAL: self.write_literal(token.lit);
-			case MATCH:   self.write_match(token.length(), token.offset());
+			case LITERAL: self.write_literal(token.lit)!;
+			case MATCH:   self.write_match(token.length(), token.offset())!;
 			default: unreachable("invalid token type encountered");
 		}
 	}
 }
 
-fn void HuffCompressor.write_distance(&self, usz l) @inline
+fn void? FlateCompressor.write_distance(&self, usz l) @inline
 {
 	char len = self.dt.blen[l];
 	uint code = self.dt.codes[l];
-	self.stream.write(code, len);
+	self.setbits(code, len)!;
 }
 
-fn void HuffCompressor.write_literal(&self, usz c) @inline
+fn void? FlateCompressor.write_literal(&self, usz c) @inline
 {
 	char len = self.lt.blen[c];
 	uint code = self.lt.codes[c];
-	self.stream.write(code, len);
+	self.setbits(code, len)!;
 }
 
-fn void HuffCompressor.write_end_of_block(&self) @inline
+fn void? FlateCompressor.write_end_of_block(&self) @inline
 {
-	self.write_literal(END_OF_BLOCK);
+	self.write_literal(END_OF_BLOCK)!;
 }
 
-fn void HuffCompressor.write_match(&self, uint len, uint dist)
+fn void? FlateCompressor.write_match(&self, uint len, uint dist)
 {
 	usz i;
 
 	// Write length code.
 	i = huff_index_lookup(&len_base, len);
-	self.write_literal(i+257);
+	self.write_literal(i+257)!;
 
 	// Write extra bit.
 	if (len_extra[i])
 	{
-		self.stream.write(len-len_base[i], len_extra[i]);
+		self.setbits(len-len_base[i], len_extra[i])!;
 	}
 
 	// Write distance code.
 	i = huff_index_lookup(&dist_base, dist);
-	self.write_distance(i);
+	self.write_distance(i)!;
 
 	// Write extra bit.
 	if (dist_extra[i])
 	{
-		self.stream.write(dist-dist_base[i], dist_extra[i]);
+		self.setbits(dist-dist_base[i], dist_extra[i])!;
 	}
 }
 
