@@ -1,6 +1,6 @@
 {
   "provides" : "compress",
-  "sources" : [ "src/**" ],
+  "sources" : [ "src/flate/**" ],
   "targets" : {
     "android-aarch64" : {
       // Extra flags to the linker for this target:
