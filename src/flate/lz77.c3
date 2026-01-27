@@ -10,46 +10,46 @@ const uint MIN_OFFSET_LEN  = 1;
 const uint HASH_SIZE       = 1U << 15;
 const uint HASH_MASK       = HASH_SIZE - 1;
 
-enum TokenType : inline char
+enum LzTokenType : inline char
 {
 	INVALID,
 	LITERAL,
 	MATCH
 }
 
-bitstruct Token (Printable) : uint @bigendian @overlap
+bitstruct LzToken (Printable) : uint @bigendian @overlap
 {
-	TokenType type : 0..2;   // 2 bits:  0 = INVALID, 1 = LITERAL, 2 = MATCH, 3 = EOF
-	char      len  : 3..10;  // 8 bits:  len = length - MIN_MATCH_LENGTH, where length is [3-258]
-	uint      off  : 11..31; // 20 bits: off = offset - MIN_OFFSET_SIZE, where offset i [1-32768]
-	char      lit  : 24..31; // 8 bits:  store literal
+	LzTokenType type : 0..2;   // 2 bits:  0 = INVALID, 1 = LITERAL, 2 = MATCH, 3 = EOF
+	char         len : 3..10;  // 8 bits:  len = length - MIN_MATCH_LENGTH, where length is [3-258]
+	uint         off : 11..31; // 20 bits: off = offset - MIN_OFFSET_SIZE, where offset i [1-32768]
+	char         lit : 24..31; // 8 bits:  store literal
 }
 
-fn uint Token.length(&self) => MIN_MATCH_LEN + self.len;
-fn uint Token.offset(&self) => MIN_OFFSET_LEN + self.off;
+fn uint LzToken.length(&self) => MIN_MATCH_LEN + self.len;
+fn uint LzToken.offset(&self) => MIN_OFFSET_LEN + self.off;
 
 <*
  @require length >= MIN_MATCH_LEN
  @require offset >= MIN_OFFSET_LEN
 *>
-fn Token make_match(uint length, uint offset)
+fn LzToken make_match(uint length, uint offset)
 {
-	return (Token){
+	return (LzToken){
 		.type = MATCH,
 		.len = (char)(length - MIN_MATCH_LEN),
 		.off = offset - MIN_OFFSET_LEN,
 	};
 }
 
-fn Token make_literal(char literal)
+fn LzToken make_literal(char literal)
 {
-	return (Token){
+	return (LzToken){
 		.type = LITERAL,
 		.lit = literal,
 	};
 }
 
-fn usz? Token.to_format(&self, Formatter *f) @dynamic
+fn usz? LzToken.to_format(&self, Formatter *f) @dynamic
 {
 	switch (self.type)
 	{
@@ -63,7 +63,7 @@ fn usz? Token.to_format(&self, Formatter *f) @dynamic
 }
 
 alias HashKey  = uint;
-fn HashKey lz77_hash(char[3] b)
+fn HashKey hash(char[3] b) @private
 {
 	uint x = (b[0] << 16) | (b[1] << 8) | b[2];
 	x ^= x >> 12;
@@ -71,18 +71,23 @@ fn HashKey lz77_hash(char[3] b)
 	return x & HASH_MASK;
 }
 
-alias RingBuf = CircularBuffer{ MAX_WINDOW_SIZE };
-alias MatchPair = Pair{uint, uint};
+alias LzRingBuf = CircularBuffer{ MAX_WINDOW_SIZE };
 
-struct MatchFinder
+struct LzMatch
 {
-	RingBuf rb;
+	uint length;
+	uint distance;
+}
+
+struct LzMatchFinder
+{
+	LzRingBuf rb;
 	int[] head;
 	int[] prev;
 	Allocator allocator;
 }
 
-fn void MatchFinder.init(&self, Allocator allocator)
+fn void LzMatchFinder.init(&self, Allocator allocator)
 {
 	self.rb.init();
 	self.head = allocator::new_array(allocator, int, HASH_SIZE);
@@ -92,19 +97,19 @@ fn void MatchFinder.init(&self, Allocator allocator)
 	self.allocator = allocator;
 }
 
-fn void MatchFinder.free(&self)
+fn void LzMatchFinder.free(&self)
 {
 	allocator::free(self.allocator, self.head);
 	allocator::free(self.allocator, self.prev);
 	*self = {};
 }
 
-fn void MatchFinder.put_char(&self, char b) => self.rb.push(b);
+fn void LzMatchFinder.put_char(&self, char b) => self.rb.push(b);
 
 <*
  Insert the current position p with hash h into the hash table.
 *>
-fn void MatchFinder.insert(&self, HashKey h, int p)
+fn void LzMatchFinder.insert(&self, HashKey h, int p)
 {
 	ulong head_index = (ulong)h & (HASH_SIZE - 1);
 	ulong prev_index = (ulong)p & (MAX_WINDOW_SIZE - 1);
@@ -118,14 +123,14 @@ fn void MatchFinder.insert(&self, HashKey h, int p)
 <*
  @require lookahead.len >= MIN_MATCH_LEN
 *>
-fn MatchPair? MatchFinder.find_match(&self, int p, char[] lookahead)
+fn LzMatch? LzMatchFinder.find_match(&self, int p, char[] lookahead)
 {
 	uint match_len, dist_len, best_len, best_dist;
 	int n, candidate, rem;
 	char[MAX_MATCH_LEN] window;
 
 	// Calculate hash at current position p
-	HashKey h = lz77_hash(lookahead[:3]);
+	HashKey h = hash(lookahead[:3]);
 
 	// Get first candidate from head.
 	candidate = self.head[h & (HASH_SIZE-1)];
@@ -187,7 +192,7 @@ fn MatchPair? MatchFinder.find_match(&self, int p, char[] lookahead)
 		self.put_char(lookahead[i]);
 		if (i < lookahead.len - 2)
 		{
-			h = lz77_hash(lookahead[i:3]);
+			h = hash(lookahead[i:3]);
 			self.insert(h, p+i);
 		}
 	}
@@ -202,14 +207,14 @@ fn MatchPair? MatchFinder.find_match(&self, int p, char[] lookahead)
  @param [&inout] allocator : "Allocator for the returned token array"
  @param [in] bytes         : "Input data to be compressed by LZ77"
 *>
-fn Token[] tokenize(Allocator allocator, char[] bytes) => @pool()
+fn LzToken[] tokenize(Allocator allocator, char[] bytes) => @pool()
 {
 	int i, n, rem;
 
-	List{Token} tokens;
+	List{LzToken} tokens;
 	tokens.tinit();
 
-	MatchFinder mf;
+	LzMatchFinder mf;
 	mf.init(tmem);
 
 	n = bytes.len;
@@ -222,8 +227,8 @@ fn Token[] tokenize(Allocator allocator, char[] bytes) => @pool()
 			// Note: If we implement lazy matching, ensure that
 			// logic from find_match about updating the sliding
 			// window is adjusted.
-			tokens.push(make_match(match.first, match.second));
-			i += match.first;
+			tokens.push(make_match(match.length, match.distance));
+			i += match.length;
 		}
 		else
 		{
@@ -245,7 +250,7 @@ fn Token[] tokenize(Allocator allocator, char[] bytes) => @pool()
 <*
  Construct a byte array from a LZ77-compressed token array.
 *>
-fn char[] construct(Allocator allocator, Token[] tokens) => @pool()
+fn char[] construct(Allocator allocator, LzToken[] tokens) => @pool()
 {
 	DString buf;
 	buf.tinit();
@@ -297,6 +302,7 @@ macro usz CircularBuffer.mask(&self, usz v)
 		return v % self.buf.len;
 	$endif
 }
+
 <*
  Push a char into the buffer. If the buffer is full, it will wrap around and
  overwrite data.
@@ -308,25 +314,17 @@ fn void CircularBuffer.push(&self, char b)
 }
 
 <*
-Reads up to out.len bytes starting at position start into out.
-The ring buffer represents a fixed-size sliding window of the last
-self.buf.len bytes, so the valid history range is:
-
-[max(0, self.write - self.buf.len), self.write)
-
+Reads up to dest.len bytes starting at position start into dest.
 If start is before the oldest valid position, or if start is at or beyond
 self.write, no data is available and the function returns 0. The actual number
-of bytes copied is limited both by out.len and by the number of bytes available
-up to self.write.
+of bytes copied is limited both by dest.len and by the number of bytes
+available up to write.
 
-The function handles wrapping, performing at most two copy operations to cover
-the region [start, start + actual_len) in the circular buffer.
-
-@param start: "Start position to read from. This is in the same monotonically increasing index space as write."
-@param out  : "Destination buffer where the data will be copied. Length is the maximum number of bytes to read"
-@return "The number of bytes actually read into out."
+@param start      : "Start position to read from."
+@param [out] dest : "Destination buffer where the data will be copied."
+@return "The number of bytes actually read into dest."
 *>
-fn usz CircularBuffer.read(&self, usz start, char[] out)
+fn usz CircularBuffer.read(&self, usz start, char[] dest)
 {
 	usz oldest = self.write > self.buf.len ? self.write - self.buf.len : 0;
 
@@ -339,21 +337,21 @@ fn usz CircularBuffer.read(&self, usz start, char[] out)
 	// Available bytes from start up to write
 	usz available = self.write - start;
 
- 	// Clamp n to available bytes
-	usz n = out.len;
+	// Clamp n to available bytes.
+	usz n = dest.len;
 	if (n > available) n = available;
 
 	// Read n bytes from start:
 	// First chunk until buffer end.
 	usz first = self.buf.len - self.mask(start);
 	if (first > n) first = n;
-	out[:first] = self.buf[self.mask(start):first];
+	dest[:first] = self.buf[self.mask(start):first];
 
 	// Optional second chunk from beginning.
 	if (first < n)
 	{
 		usz rem = n - first;
-		out[first:rem] = self.buf[:rem];
+		dest[first:rem] = self.buf[:rem];
 	}
 	return n;
 }
@@ -366,7 +364,7 @@ import compress::flate::lz77_test_data @public;
 fn void bench_lz77_long_text() => @pool()
 {
 	String text = lz77_test_data::long_text;
-	Token[] tokens = lz77::tokenize(tmem, text);
+	LzToken[] tokens = lz77::tokenize(tmem, text);
 }
 
 module compress::flate::lz77_test @test;
@@ -381,7 +379,7 @@ fn void test_lz77_short() => @pool()
 	};
 	foreach (s: tests)
 	{
-		Token[] tokens = lz77::tokenize(tmem, s);
+		LzToken[] tokens = lz77::tokenize(tmem, s);
 		String r = (String)lz77::construct(tmem, tokens);
 		assert(r == s, "got: %s, want: %s", r, s);
 	}
@@ -390,7 +388,7 @@ fn void test_lz77_short() => @pool()
 fn void test_lz77_long_text() => @pool()
 {
 	String text = lz77_test_data::long_text[..];
-	Token[] tokens = lz77::tokenize(tmem, text);
+	LzToken[] tokens = lz77::tokenize(tmem, text);
 	String r = (String)lz77::construct(tmem, tokens);
 	test::eq(r, text);
 }

@@ -187,7 +187,7 @@ fn void? encode_stored_block(FlateCompressor *c, char[] chunk, bool is_last_chun
 *>
 fn void? encode_fixed_block(FlateCompressor *c, char[] chunk, bool is_last_chunk) => @pool()
 {
-	Token[] tokens = lz77::tokenize(tmem, chunk);
+	LzToken[] tokens = lz77::tokenize(tmem, chunk);
 	c.build_fixed_trees()!;
 	c.write_block_header(is_last_chunk ? 1 : 0, 0b01)!;
 	c.write_compressed_data(tokens)!;
@@ -204,7 +204,7 @@ fn void? encode_fixed_block(FlateCompressor *c, char[] chunk, bool is_last_chunk
 *>
 fn void? encode_dynamic_block(FlateCompressor *c, char[] chunk, bool is_last_chunk) => @pool()
 {
-	Token[] tokens = lz77::tokenize(tmem, chunk);
+	LzToken[] tokens = lz77::tokenize(tmem, chunk);
 	c.build_trees(tokens)!;
 	c.write_dynamic_header(is_last_chunk)!;
 	c.write_compressed_data(tokens)!;

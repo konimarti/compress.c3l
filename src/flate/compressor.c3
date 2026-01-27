@@ -50,7 +50,7 @@ fn void? FlateCompressor.flush_bits(&self) @inline
  tokens, adds the end-of-block marker, and generates canonical Huffman codes
  for both alphabets.
 *>
-fn void? FlateCompressor.build_trees(&self, Token[] tokens)
+fn void? FlateCompressor.build_trees(&self, LzToken[] tokens)
 {
 	// Calculate literal, length and distance frequencies.
 	uint[288] lt_freqs;
@@ -186,7 +186,7 @@ fn void? FlateCompressor.write_block_header(&self, uint bfinal, uint btype) @inl
  Literals are encoded directly with the literal/length tree; matches
  are mapped to length and distance codes plus any required extra bits.
 *>
-fn void? FlateCompressor.write_compressed_data(&self, Token[] tokens)
+fn void? FlateCompressor.write_compressed_data(&self, LzToken[] tokens)
 {
 	foreach (token: tokens)
 	{
