@@ -1,7 +1,9 @@
 // Copyright (c) 2026 Koni Marti. All rights reserved.
 // Use of this source code is governed by the MIT license.
 <*
- High-level convenience API for DEFLATE compression and decompression.
+ This module implements the DEFLATE compression and decompression algorithm
+ specified in RFC 1951.
+
  For normal use, call compress()/uncompress(); deflate()/inflate() are
  lower-level entry points with more control over block handling.
 *>
@@ -9,11 +11,10 @@ module compress::flate;
 import std::io;
 
 <*
- Compresses the given input using the DEFLATE format (RFC 1951).
- This is the high-level convenience API. It selects an appropriate block
- strategy (stored vs. compressed) based on the input and returns a single
- DEFLATE stream. The caller owns the returned buffer and must free it
- using the same allocator.
+ Compresses the given input using the DEFLATE format (RFC 1951).  compress
+ selects an appropriate block strategy (stored vs. compressed) based on the
+ input and returns a single DEFLATE stream. The caller owns the returned buffer
+ and must free it using the same allocator.
 *>
 fn char[]? compress(Allocator allocator, char[] bytes) @inline
 {
@@ -32,9 +33,9 @@ fn char[]? tcompress(char[] bytes) @inline => compress(tmem, bytes);
 <*
  Decompresses a complete DEFLATE stream into a newly allocated buffer.
 
- This is the high-level convenience API. It validates block headers and
- reconstructs the original uncompressed data. The caller owns the returned
- buffer and must free it using the same allocator.
+ uncompress() validates block headers and reconstructs the original
+ uncompressed data. The caller owns the returned buffer and must free it using
+ the same allocator.
 *>
 fn char[]? uncompress(Allocator allocator, char[] bytes) @inline => inflate(allocator, bytes);
 
@@ -55,12 +56,12 @@ const MAX_BLOCK_SIZE = 65_535;
 alias DeflateBlockFn = fn void?(FlateCompressor *c, char[] input_chunk, bool is_last_chunk);
 
 <*
- Low-level deflate() with a pluggable block strategy.
+ deflate() compresses the input data with a pluggable block strategy.
 
  The input is processed in one or more chunks. For each chunk, this function
  calls the user-supplied block_fn, which is responsible for:
    - performing LZ77 tokenization as needed,
-   - emitting a DEFLATE blocks into the FlateCompressor, and
+   - emitting a DEFLATE block into the FlateCompressor, and
    - ensuring the final block it emits has BFINAL = 1 when is_last_chunk
      is true.
 
@@ -70,8 +71,10 @@ alias DeflateBlockFn = fn void?(FlateCompressor *c, char[] input_chunk, bool is_
  into a newly allocated buffer, which is returned to the caller.
 
  max_block_len is an upper bound on the number of input bytes passed to a
- single block_fn call; block_fn is free to emit multiple DEFLATE blocks
- for its chunk if desired (currently not implemented).
+ single block_fn call; block_fn is free to emit multiple DEFLATE blocks for its
+ chunk if desired. Currently, the block lengths are set to a fixed length. In
+ theory, the block lengths should be dynamically determined depending on
+ changes in the underyling alphabets for best compression results.
 
  @param [&inout] allocator : "Allocator for compressed data."
  @param [in] bytes         : "Input data to be compressed."
@@ -175,7 +178,7 @@ fn void? encode_stored_block(FlateCompressor *c, char[] chunk, bool is_last_chun
 }
 
 <*
- Emits a DEFLATE blocks using the fixed Huffman code trees.
+ Emits a DEFLATE block using the fixed Huffman code trees.
 
  The function tokenizes the input with LZ77, uses the fixed literal/length
  and distance trees defined by RFC 1951, writes the fixed-block header,

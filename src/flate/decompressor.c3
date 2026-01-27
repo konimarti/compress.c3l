@@ -6,8 +6,7 @@ import std::io;
 <*
  FlateDecompressor holds the bit reader, output writer, and the canonical
  Huffman metadata for literal/length and distance symbols. It provides methods
- to decode stored, fixed, and dynamic Huffman blocks from a DEFLATE stream
- using canonical Huffman codebooks.
+ to decode stored, fixed, and dynamic Huffman blocks.
 *>
 struct FlateDecompressor
 {
@@ -44,7 +43,7 @@ fn uint? FlateDecompressor.getbits(&self, uint nbits) @inline
 
 faultdef INVALID_LENGTH;
 <*
- Decodes a stored (uncompressed) DEFLATE block.
+ Decodes a stored (uncompressed) block.
  @return? INVALID_LENGTH
 *>
 fn void? FlateDecompressor.decode_stored_block(&self)
@@ -86,7 +85,7 @@ fn void? FlateDecompressor.decode_fixed_block(&self)
 <*
  Decodes a block compressed with dynamic Huffman coding.
  Reads the dynamic Huffman tree description from the bitstream, builds the
- corresponding canonical literal/length and distance codebooks.
+ corresponding canonical literal/length and distance codes.
 *>
 fn void? FlateDecompressor.decode_dynamic_block(&self)
 {
@@ -96,9 +95,6 @@ fn void? FlateDecompressor.decode_dynamic_block(&self)
 
 <*
  Parses and builds the dynamic Huffman trees.
- Reads HLIT, HDIST, and HCLEN, decodes the code-length Huffman tree, then uses
- it to reconstruct the full set of literal/length and distance code lengths.
- From these, canonical Huffman orders are constructed.
 *>
 fn void? FlateDecompressor.decode_trees(&self)
 {
@@ -146,11 +142,11 @@ fn void? FlateDecompressor.decode_trees(&self)
 }
 
 <*
- Inflates a single compressed block using current Huffman metadata.
+ Inflates a single compressed block using current Huffman data.
  Uses the literal/length (ls) and distance (ds) canonical information to
  decode symbols from the bitstream. Literals are written directly to the
  output; length/distance pairs cause bytes to be copied from already
- decompressed output  until the end-of-block symbol is reached.
+ decompressed output until the end-of-block symbol is reached.
  Based on the tinf implementation.
 *>
 fn void? FlateDecompressor.inflate_block(&self)
@@ -194,6 +190,7 @@ fn void? FlateDecompressor.inflate_block(&self)
  Decodes a single Huffman-coded symbol using canonical metadata.
  Interprets bits from the input as a canonical Huffman codeword of
  increasing length, using counts and symbols from the given HuffOrder.
+ Based on zlib's puff implementation.
 
  @return "Returns the decoded symbol index"
  @return? NOT_FOUND

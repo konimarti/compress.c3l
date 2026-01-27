@@ -8,10 +8,10 @@ module compress::flate::bitio;
 import std::io;
 
 <*
- FlateWriter accumulates bits in a little-endian buffer and writes bytes
- to the underlying stream as soon as at least one full byte is available.
- Bits are appended starting at the least significant bit (LSB-first), which
- matches DEFLATE’s bit ordering requirements for headers and Huffman codes.
+ FlateWriter accumulates bits in a little-endian buffer and writes bytes to the
+ underlying stream as soon as the internal buffer fills up. Bits are appended
+ starting at the least significant bit (LSB-first), which matches DEFLATE’s bit
+ ordering requirements for headers and Huffman codes.
 *>
 struct FlateWriter
 {
@@ -129,7 +129,7 @@ fn uint? FlateReader.peek_bits(&self, isz num_bits)
 {
 	while (self.nbits < num_bits)
 	{
-		// New bits are appended on the left
+		// New bits are appended on the left.
 		char c = self.reader.read_byte()!;
 		self.bits |= (ulong)c << self.nbits;
 		self.nbits += 8;
