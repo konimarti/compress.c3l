@@ -14,16 +14,23 @@ const END_OF_BLOCK = 256;
 struct FlateCompressor
 {
 	FlateWriter writer; // Bit-level output writer (LSB-first).
-	HuffCodes lt;       // Literal/Length Huffman codes.
-	HuffCodes dt;       // Distance Huffman codes.
+	HuffCodes   lt;     // Literal/Length Huffman codes.
+	HuffCodes   dt;     // Distance Huffman codes.
+	LzTokenizer tz;
 }
 
 <*
  Initializes a FlateCompressor with the given output stream.
 *>
-fn void FlateCompressor.init(&self, OutStream wrapped)
+fn void FlateCompressor.init(&self, Allocator allocator, OutStream wrapped)
 {
 	self.writer.init(wrapped);
+	self.tz.init(allocator);
+}
+
+fn void FlateCompressor.free(&self)
+{
+	self.tz.free();
 }
 
 <*

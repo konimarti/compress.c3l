@@ -200,6 +200,54 @@ fn LzMatch? LzMatchFinder.find_match(&self, int p, char[] lookahead)
 	return {best_len, best_dist};
 }
 
+struct LzTokenizer
+{
+	LzMatchFinder mf;
+	int pos;
+}
+
+fn void LzTokenizer.init(&self, Allocator allocator)
+{
+	self.mf.init(allocator);
+	self.pos = 0;
+}
+
+fn void LzTokenizer.free(&self)
+{
+	self.mf.free();
+}
+
+fn LzToken[] LzTokenizer.tokenize(&self, Allocator allocator, char[] bytes) => @pool()
+{
+	int i = 0;
+	int n = (int)bytes.len;
+	List{LzToken} tokens;
+	tokens.tinit();
+
+	while (i < n)
+	{
+		int remaining = n - i;
+		int lookahead = remaining > MAX_MATCH_LEN ? MAX_MATCH_LEN : remaining;
+
+		if (lookahead >= MIN_MATCH_LEN)
+		{
+			if (try match = self.mf.find_match(self.pos+i, bytes[i:lookahead]))
+			{
+				tokens.push(make_match(match.length, match.distance));
+				i += match.length;
+				continue;
+			}
+		}
+
+		tokens.push(make_literal(bytes[i]));
+		i++;
+	}
+
+	self.pos += n;
+	return tokens.to_array(allocator);
+}
+
+
 <*
  Tokenize input byte stream into literal or match tokens using the Lempel-Ziv
  compression approach.
@@ -207,44 +255,12 @@ fn LzMatch? LzMatchFinder.find_match(&self, int p, char[] lookahead)
  @param [&inout] allocator : "Allocator for the returned token array"
  @param [in] bytes         : "Input data to be compressed by LZ77"
 *>
-fn LzToken[] tokenize(Allocator allocator, char[] bytes) => @pool()
+fn LzToken[] tokenize_all(Allocator allocator, char[] bytes) => @pool()
 {
-	int i, n, rem;
+	LzTokenizer tokenizer;
+	tokenizer.init(tmem);
 
-	List{LzToken} tokens;
-	tokens.tinit();
-
-	LzMatchFinder mf;
-	mf.init(tmem);
-
-	n = bytes.len;
-	while (i < n - 2)
-	{
-		rem = n - i;
-		rem = rem > MAX_MATCH_LEN ? MAX_MATCH_LEN : rem;
-		if (try match = mf.find_match(i, bytes[i:rem]))
-		{
-			// Note: If we implement lazy matching, ensure that
-			// logic from find_match about updating the sliding
-			// window is adjusted.
-			tokens.push(make_match(match.length, match.distance));
-			i += match.length;
-		}
-		else
-		{
-			tokens.push(make_literal(bytes[i]));
-			i++;
-		}
-	}
-
-	// Emit remaining literal tokens.
-	while (i < n)
-	{
-		tokens.push(make_literal(bytes[i]));
-		i++;
-	}
-
-	return tokens.to_array(allocator);
+	return tokenizer.tokenize(allocator, bytes);
 }
 
 <*
@@ -364,7 +380,7 @@ import compress::flate::lz77_test_data @public;
 fn void bench_lz77_long_text() => @pool()
 {
 	String text = lz77_test_data::long_text;
-	LzToken[] tokens = lz77::tokenize(tmem, text);
+	LzToken[] tokens = lz77::tokenize_all(tmem, text);
 }
 
 module compress::flate::lz77_test @test;
@@ -379,7 +395,7 @@ fn void test_lz77_short() => @pool()
 	};
 	foreach (s: tests)
 	{
-		LzToken[] tokens = lz77::tokenize(tmem, s);
+		LzToken[] tokens = lz77::tokenize_all(tmem, s);
 		String r = (String)lz77::construct(tmem, tokens);
 		assert(r == s, "got: %s, want: %s", r, s);
 	}
@@ -388,7 +404,7 @@ fn void test_lz77_short() => @pool()
 fn void test_lz77_long_text() => @pool()
 {
 	String text = lz77_test_data::long_text[..];
-	LzToken[] tokens = lz77::tokenize(tmem, text);
+	LzToken[] tokens = lz77::tokenize_all(tmem, text);
 	String r = (String)lz77::construct(tmem, tokens);
 	test::eq(r, text);
 }
