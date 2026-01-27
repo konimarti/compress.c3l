@@ -1,9 +1,9 @@
 ## DEFLATE compression in C3
 
-A C3 implementation of the **DEFLATE** compression format (RFC 1951).
+A C3 implementation of the DEFLATE compression format (RFC 1951).
 
-The library provides both a **simple buffer API** (`compress` / `uncompress`)
-and **lower‑level building blocks** (`deflate` / `inflate`).
+The library provides both a simple API (`compress` / `uncompress`)
+and lower‑level building blocks (`deflate` / `inflate`).
 
 ### Features
 
