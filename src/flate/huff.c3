@@ -99,7 +99,8 @@ faultdef ERR_CODEGEN;
 *>
 fn int? build_canonical_codes(uint[] codes, char[] blen)
 {
-	uint[MAX_CODE_BITS] bl_count, next_code;
+	uint[MAX_CODE_BITS + 1] bl_count;
+	uint[MAX_CODE_BITS] next_code;
 	int max_sym = -1;
 
 	foreach (len: blen)
@@ -146,7 +147,7 @@ fn void test_huff_codegen() @test
 *>
 struct HuffOrder
 {
-	uint[MAX_CODE_BITS] counts; // Number of symbols of each lengths.
+	uint[MAX_CODE_BITS + 1] counts; // Number of symbols of each lengths (0-15).
 	uint[288] symbols;          // Symbols in canonical order.
 }
 
