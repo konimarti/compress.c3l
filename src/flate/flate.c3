@@ -83,14 +83,20 @@ alias DeflateBlockFn = fn void?(FlateCompressor *c, char[] input_chunk, bool is_
 
  @return "A newly allocated char[] containing the complete DEFLATE stream."
 *>
-fn char[]? deflate(Allocator allocator, char[] bytes, DeflateBlockFn block_fn = &dynamic_block,
+fn char[]? deflate(Allocator allocator, char[] bytes, DeflateBlockFn block_fn = &encode_dynamic_block,
 	usz max_block_len = MAX_BLOCK_SIZE) => @pool()
 {
 	ByteWriter out;
 	out.init(allocator);
+	deflate_stream(&out, bytes, block_fn, max_block_len)!;
+	return out.array_view();
+}
 
+fn void? deflate_stream(OutStream out, char[] bytes, DeflateBlockFn block_fn = &encode_dynamic_block,
+	usz max_block_len = MAX_BLOCK_SIZE) => @pool()
+{
 	FlateCompressor comp;
-	comp.init(&out);
+	comp.init(out);
 
 	usz offset = 0;
 	while (offset < bytes.len)
@@ -104,7 +110,6 @@ fn char[]? deflate(Allocator allocator, char[] bytes, DeflateBlockFn block_fn = 
 	}
 
 	comp.flush_bits()!;
-	return out.array_view();
 }
 
 faultdef INVALID_BLOCK_TYPE;
@@ -124,12 +129,16 @@ fn char[]? inflate(Allocator allocator, char[] bytes)
 {
 	ByteReader byte_reader;
 	byte_reader.init(bytes);
+	return inflate_stream(allocator, &byte_reader);
+}
 
+fn char[]? inflate_stream(Allocator allocator, InStream byte_reader)
+{
 	ByteWriter byte_writer;
 	byte_writer.init(allocator);
 
 	FlateDecompressor decomp;
-	decomp.init(&byte_reader, &byte_writer);
+	decomp.init(byte_reader, &byte_writer);
 
 	uint bfinal, btype;
 	do
@@ -147,7 +156,6 @@ fn char[]? inflate(Allocator allocator, char[] bytes)
 	} while (!bfinal);
 	return byte_writer.array_view();
 }
-
 
 <*
  Emits a stored (uncompressed) DEFLATE block for the given input.
