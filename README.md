@@ -1,13 +1,14 @@
 ## DEFLATE compression in C3
 
-A C3 implementation of the DEFLATE compression format (RFC 1951).
+A C3 implementation of the DEFLATE (RFC 1951) and GZIP (RFC 1952) compression
+format.
 
 The library provides both a simple API (`compress` / `uncompress`)
 and lower‑level building blocks (`deflate` / `inflate`).
 
 ### Features
 
-- DEFLATE encode and decode (raw DEFLATE stream, no zlib/gzip wrapper yet)
+- DEFLATE encode and decode (raw DEFLATE stream), and GZIP format.
 - Canonical Huffman code generation (fixed and dynamic trees)
 - LZ77 tokenizer with sliding window and hash‑chain match finder
 - Bit‑level I/O in LSB‑first order for DEFLATE’s bitstream
