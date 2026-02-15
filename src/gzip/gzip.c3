@@ -3,12 +3,6 @@
 module compress::gzip;
 import std::io, std::hash::crc32, compress::flate;
 
-//  A compliant compressor must produce files with correct ID1,
-//  ID2, CM, CRC32, and ISIZE, but may set all the other fields in
-//  the fixed-length part of the header to default values (255 for
-//  OS, 0 for all others).  The compressor must set all reserved
-//  bits to zero
-
 struct GzipHeader @packed
 {
 	UShortLE id;
@@ -21,25 +15,26 @@ struct GzipHeader @packed
 
 faultdef CORRUPT_HEADER, CORRUPT_DATA;
 
+const ushort MAGIC  = 0x8b1f;
+
 const char FHCRC    = 1 << 1;
 const char FEXTRA   = 1 << 2;
 const char FNAME    = 1 << 3;
 const char FCOMMENT = 1 << 4;
-const ushort MAGIC  = 0x8b1f;
 
 fn char[]? uncompress(Allocator allocator, char[] src)
 {
 	ByteReader reader = { .bytes = src };
-	return uncompress_stream(allocator, &reader);
+	return uncompress_from_stream(allocator, &reader);
 }
 
-fn char[]? uncompress_stream(Allocator allocator, InStream _reader)
+fn char[]? uncompress_from_stream(Allocator allocator, InStream _reader)
 {
 	CrcReader reader;
 	reader.init(_reader);
 
 	GzipHeader header;
-	reader.read(((char*)&header)[:GzipHeader.sizeof])!;
+	reader.read((char[GzipHeader.sizeof]*)&header)!;
 
 	if (header.id.val != MAGIC) return CORRUPT_HEADER~;
 	if (header.cm != 8) return CORRUPT_HEADER~;
@@ -60,7 +55,7 @@ fn char[]? uncompress_stream(Allocator allocator, InStream _reader)
 
 	if (header.flg & FCOMMENT)
 	{
-		// Skip filename.
+		// Skip comment.
 		while (reader.read_byte()!);
 	}
 
@@ -75,6 +70,9 @@ fn char[]? uncompress_stream(Allocator allocator, InStream _reader)
 
 	uint crc32 = io::read_le_uint(&reader)!;
 	if (crc32 != crc32::hash(data)) return CORRUPT_DATA~;
+
+	uint isize = io::read_le_uint(&reader)!;
+	if (isize != (data.len & 0xFFFFFFFF)) return CORRUPT_DATA~;
 
 	return data;
 }
@@ -123,24 +121,27 @@ fn char[]? compress(Allocator allocator, char[] src)
 {
 	ByteWriter bw;
 	bw.init(allocator);
-
-	GzipHeader header = {
-		.cm    = 8,
-		.os    = 0xff,
-	};
-	header.id.val = MAGIC;
-
-	bw.write(((char*)&header)[:GzipHeader.sizeof])!;
-
-	flate::deflate_stream(&bw, src)!;
-
-	io::write_le_int(&bw, crc32::hash(src))!;
-	io::write_le_int(&bw, src.len & 0xFFFFFFFF)!;
-
+	compress_to_stream(&bw, src)!;
 	return bw.array_view();
 }
 
-struct CrcReader (InStream)
+fn void? compress_to_stream(OutStream writer, char[] src)
+{
+	GzipHeader header = {
+		.id = { .val = MAGIC },
+		.cm = 8,
+		.os = 0xff,
+	};
+
+	writer.write((char[GzipHeader.sizeof]*)&header)!;
+
+	flate::deflate_stream(writer, src)!;
+
+	io::write_le_int(writer, crc32::hash(src))!;
+	io::write_le_int(writer, src.len & 0xFFFFFFFF)!;
+}
+
+struct CrcReader (InStream) @private
 {
 	InStream reader;
 	Crc32 crc;
