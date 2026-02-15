@@ -49,33 +49,29 @@ fn Gzip? uncompress(Allocator allocator, char[] src)
 
 fn Gzip? uncompress_from_stream(Allocator allocator, InStream reader)
 {
-	Gzip gzip = { .allocator = allocator };
-	defer catch gzip.free();
+	Gzip gz = { .allocator = allocator };
+	defer catch gz.free();
 
-	reader.read((char[GzipHeader.sizeof]*)&gzip.header)!;
+	reader.read((char[GzipHeader.sizeof]*)&gz.header)!;
 
-	if (gzip.header.id.val != GZIP_MAGIC) return CORRUPT_HEADER~;
-	if (gzip.header.cm != 8) return CORRUPT_HEADER~;
-	if (gzip.header.flg & 0xE0) return CORRUPT_HEADER~;
+	if (gz.header.id.val != GZIP_MAGIC) return CORRUPT_HEADER~;
+	if (gz.header.cm != 8) return CORRUPT_HEADER~;
+	if (gz.header.flg & 0xE0) return CORRUPT_HEADER~;
 
 	Crc32 hash;
 	hash.init();
-	hash.update((char[GzipHeader.sizeof]*)&gzip.header);
+	hash.update((char[GzipHeader.sizeof]*)&gz.header);
 
-	if (gzip.header.flg & FEXTRA)
+	if (gz.header.flg & FEXTRA)
 	{
 		ushort xlen = io::read_le_ushort(reader)!;
 		hash.update((char[2]*)&xlen);
-		@pool()
-		{
-			char[] extra = allocator::malloc(tmem, xlen)[:xlen];
-			reader.read(extra)!;
-			hash.update(extra);
-			gzip.extra = codepage::decode(allocator, extra, CodePage.ISO_8859_1)!;
-		};
+		gz.extra = allocator::malloc(allocator, xlen)[:xlen];
+		reader.read(gz.extra)!;
+		hash.update(gz.extra);
 	}
 
-	if (gzip.header.flg & FNAME)
+	if (gz.header.flg & FNAME)
 	{
 		@pool()
 		{
@@ -87,11 +83,11 @@ fn Gzip? uncompress_from_stream(Allocator allocator, InStream reader)
 				if (!c) break;
 				name.write_byte(c)!;
 			}
-			gzip.filename = codepage::decode(allocator, name.array_view(), CodePage.ISO_8859_1)!;
+			gz.filename = codepage::decode(allocator, name.array_view(), CodePage.ISO_8859_1)!;
 		};
 	}
 
-	if (gzip.header.flg & FCOMMENT)
+	if (gz.header.flg & FCOMMENT)
 	{
 		@pool()
 		{
@@ -103,26 +99,26 @@ fn Gzip? uncompress_from_stream(Allocator allocator, InStream reader)
 				if (!c) break;
 				comment.write_byte(c)!;
 			}
-			gzip.comment = codepage::decode(allocator, comment.array_view(), CodePage.ISO_8859_1)!;
+			gz.comment = codepage::decode(allocator, comment.array_view(), CodePage.ISO_8859_1)!;
 		};
 	}
 
-	if (gzip.header.flg & FHCRC)
+	if (gz.header.flg & FHCRC)
 	{
 		ushort crc16 = (ushort)(hash.final() & 0xFFFF);
 		ushort hcrc = io::read_le_ushort(reader)!;
 		if (crc16 != hcrc) return CORRUPT_HEADER~;
 	}
 
-	gzip.uncompressed = flate::inflate_stream(allocator, reader)!;
+	gz.uncompressed = flate::inflate_stream(allocator, reader)!;
 
 	uint crc32 = io::read_le_uint(reader)!;
-	if (crc32 != crc32::hash(gzip.uncompressed)) return CORRUPT_DATA~;
+	if (crc32 != crc32::hash(gz.uncompressed)) return CORRUPT_DATA~;
 
 	uint isize = io::read_le_uint(reader)!;
-	if (isize != (gzip.uncompressed.len & 0xFFFFFFFF)) return CORRUPT_DATA~;
+	if (isize != (gz.uncompressed.len & 0xFFFFFFFF)) return CORRUPT_DATA~;
 
-	return gzip;
+	return gz;
 }
 
 fn char[]? compress(Allocator allocator, char[] src, bool hcrc = false,
