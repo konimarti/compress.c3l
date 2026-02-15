@@ -47,11 +47,8 @@ fn Gzip? uncompress(Allocator allocator, char[] src)
 	return uncompress_from_stream(allocator, &reader);
 }
 
-fn Gzip? uncompress_from_stream(Allocator allocator, InStream _reader)
+fn Gzip? uncompress_from_stream(Allocator allocator, InStream reader)
 {
-	CrcReader reader;
-	reader.init(_reader);
-
 	Gzip gzip = { .allocator = allocator };
 	defer catch gzip.free();
 
@@ -61,13 +58,19 @@ fn Gzip? uncompress_from_stream(Allocator allocator, InStream _reader)
 	if (gzip.header.cm != 8) return CORRUPT_HEADER~;
 	if (gzip.header.flg & 0xE0) return CORRUPT_HEADER~;
 
+	Crc32 hash;
+	hash.init();
+	hash.update((char[GzipHeader.sizeof]*)&gzip.header);
+
 	if (gzip.header.flg & FEXTRA)
 	{
-		ushort xlen = io::read_le_ushort(&reader)!;
+		ushort xlen = io::read_le_ushort(reader)!;
+		hash.update((char[2]*)&xlen);
 		@pool()
 		{
 			char[] extra = allocator::malloc(tmem, xlen)[:xlen];
 			reader.read(extra)!;
+			hash.update(extra);
 			gzip.extra = codepage::decode(allocator, extra, CodePage.ISO_8859_1)!;
 		};
 	}
@@ -78,7 +81,12 @@ fn Gzip? uncompress_from_stream(Allocator allocator, InStream _reader)
 		{
 			ByteWriter name;
 			name.tinit();
-			while (try c = reader.read_byte() && c) name.write_byte(c)!;
+			while (try c = reader.read_byte())
+			{
+				hash.updatec(c);
+				if (!c) break;
+				name.write_byte(c)!;
+			}
 			gzip.filename = codepage::decode(allocator, name.array_view(), CodePage.ISO_8859_1)!;
 		};
 	}
@@ -89,24 +97,29 @@ fn Gzip? uncompress_from_stream(Allocator allocator, InStream _reader)
 		{
 			ByteWriter comment;
 			comment.tinit();
-			while (try c = reader.read_byte() && c) comment.write_byte(c)!;
+			while (try c = reader.read_byte())
+			{
+				hash.updatec(c);
+				if (!c) break;
+				comment.write_byte(c)!;
+			}
 			gzip.comment = codepage::decode(allocator, comment.array_view(), CodePage.ISO_8859_1)!;
 		};
 	}
 
 	if (gzip.header.flg & FHCRC)
 	{
-		ushort crc16 = (ushort)(reader.crc32() & 0xFFFF);
-		ushort hcrc = io::read_le_ushort(&reader)!;
+		ushort crc16 = (ushort)(hash.final() & 0xFFFF);
+		ushort hcrc = io::read_le_ushort(reader)!;
 		if (crc16 != hcrc) return CORRUPT_HEADER~;
 	}
 
-	gzip.uncompressed = flate::inflate_stream(allocator, &reader)!;
+	gzip.uncompressed = flate::inflate_stream(allocator, reader)!;
 
-	uint crc32 = io::read_le_uint(&reader)!;
+	uint crc32 = io::read_le_uint(reader)!;
 	if (crc32 != crc32::hash(gzip.uncompressed)) return CORRUPT_DATA~;
 
-	uint isize = io::read_le_uint(&reader)!;
+	uint isize = io::read_le_uint(reader)!;
 	if (isize != (gzip.uncompressed.len & 0xFFFFFFFF)) return CORRUPT_DATA~;
 
 	return gzip;
@@ -167,37 +180,6 @@ fn void? compress_to_stream(OutStream writer, char[] src, bool hcrc = false,
 	io::write_le_int(writer, crc32::hash(src))!;
 	io::write_le_int(writer, src.len & 0xFF_FF_FF_FF)!;
 }
-
-struct CrcReader (InStream) @private
-{
-	InStream reader;
-	Crc32 crc;
-}
-
-fn void CrcReader.init(&self, InStream reader)
-{
-	self.reader = reader;
-	self.crc.init();
-}
-
-fn char? CrcReader.read_byte(&self) @dynamic
-{
-	char c = self.reader.read_byte()!;
-	self.crc.updatec(c);
-	return c;
-}
-
-
-fn usz? CrcReader.read(&self, char[] bytes) @dynamic
-{
-	usz n = self.reader.read(bytes)!;
-	self.crc.update(bytes[:n]);
-	return n;
-}
-
-fn uint CrcReader.crc32(&self) =>self.crc.final();
-fn void CrcReader.reset_crc(&self) => self.crc.init();
-
 
 fn void gzip_fhcrc() @test
 {
