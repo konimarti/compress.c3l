@@ -41,10 +41,15 @@ fn void Gzip.free(&self)
 	if (self.uncompressed.ptr) allocator::free(self.allocator, self.uncompressed.ptr);
 }
 
-fn Gzip? uncompress(Allocator allocator, char[] src)
+fn Gzip? uncompress(Allocator allocator, char[] src) @inline
 {
-	ByteReader reader = { .bytes = src };
-	return uncompress_from_stream(allocator, &reader);
+	return uncompress_from_stream(allocator, &&io::wrap_bytes(src));
+}
+
+fn char[]? uncompress_bytes(Allocator allocator, char[] src) @inline => @pool()
+{
+	Gzip gz = uncompress_from_stream(tmem, &&io::wrap_bytes(src))!;
+	return allocator::clone_slice(allocator, gz.uncompressed);
 }
 
 fn Gzip? uncompress_from_stream(Allocator allocator, InStream reader)
