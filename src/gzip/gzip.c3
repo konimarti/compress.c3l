@@ -52,43 +52,43 @@ fn Gzip? uncompress(Allocator allocator, char[] src) @inline
 	return uncompress_from(allocator, &&io::wrap_bytes(src));
 }
 
-fn Gzip? uncompress_from(Allocator allocator, InStream reader)
+fn Gzip? uncompress_from(Allocator allocator, InStream reader) => @pool()
 {
 	Gzip gz = { .allocator = allocator };
 	defer catch gz.free();
 
-	reader.read((char[GzipHeader.sizeof]*)&gz.header)!;
+	ByteWriter header;
+	header.tinit();
+
+	InStream header_reader = (TeeReader){}.init(reader, &header);
+
+	header_reader.read((char[GzipHeader.sizeof]*)&gz.header)!;
 
 	if (gz.header.id.val != GZIP_MAGIC) return CORRUPT_HEADER~;
 	if (gz.header.cm != 8) return CORRUPT_HEADER~;
 	if (gz.header.flg & 0xE0) return CORRUPT_HEADER~;
 
-	Crc32 hash;
-	hash.init();
-	hash.update((char[GzipHeader.sizeof]*)&gz.header);
-
 	if (gz.header.flg & FEXTRA)
 	{
-		ushort xlen = io::read_le_ushort(reader)!;
-		hash.update((char[2]*)&xlen);
+		ushort xlen = io::read_le_ushort(header_reader)!;
 		gz.extra = allocator::malloc(allocator, xlen)[:xlen];
-		reader.read(gz.extra)!;
-		hash.update(gz.extra);
+		header_reader.read(gz.extra)!;
 	}
 
 	if (gz.header.flg & FNAME)
 	{
-		gz.filename = decode_latin1(allocator, reader, &hash)!;
+		gz.filename = decode_latin1(allocator, header_reader)!;
 	}
 
 	if (gz.header.flg & FCOMMENT)
 	{
-		gz.comment = decode_latin1(allocator, reader, &hash)!;
+		gz.comment = decode_latin1(allocator, header_reader)!;
 	}
 
 	if (gz.header.flg & FHCRC)
 	{
-		ushort crc16 = (ushort)(hash.final() & 0xFFFF);
+		uint crc_hash = crc32::hash(header.array_view());
+		ushort crc16 = (ushort)(crc_hash & 0xFFFF);
 		ushort hcrc = io::read_le_ushort(reader)!;
 		if (crc16 != hcrc) return CORRUPT_HEADER~;
 	}
@@ -163,14 +163,12 @@ fn void? compress_to(OutStream writer, char[] src, bool hcrc = false,
 <*
  read a zero-terminated Latin1 string from reader.
 *>
-fn String? decode_latin1(Allocator allocator, InStream reader, Crc32 *hash) @private => @pool()
+fn String? decode_latin1(Allocator allocator, InStream reader) @private => @pool()
 {
 	ByteWriter writer;
 	writer.tinit();
-	while (try c = reader.read_byte())
+	while (try c = reader.read_byte() && c)
 	{
-		hash.updatec(c);
-		if (!c) break;
 		writer.write_byte(c)!;
 	}
 	return codepage::decode(allocator, writer.array_view(), CodePage.ISO_8859_1)!;
