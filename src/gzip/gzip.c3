@@ -41,18 +41,18 @@ fn void Gzip.free(&self)
 	if (self.uncompressed.ptr) allocator::free(self.allocator, self.uncompressed.ptr);
 }
 
-fn Gzip? uncompress(Allocator allocator, char[] src) @inline
-{
-	return uncompress_from_stream(allocator, &&io::wrap_bytes(src));
-}
-
 fn char[]? uncompress_bytes(Allocator allocator, char[] src) @inline => @pool()
 {
-	Gzip gz = uncompress_from_stream(tmem, &&io::wrap_bytes(src))!;
+	Gzip gz = uncompress_from(tmem, &&io::wrap_bytes(src))!;
 	return allocator::clone_slice(allocator, gz.uncompressed);
 }
 
-fn Gzip? uncompress_from_stream(Allocator allocator, InStream reader)
+fn Gzip? uncompress(Allocator allocator, char[] src) @inline
+{
+	return uncompress_from(allocator, &&io::wrap_bytes(src));
+}
+
+fn Gzip? uncompress_from(Allocator allocator, InStream reader)
 {
 	Gzip gz = { .allocator = allocator };
 	defer catch gz.free();
@@ -78,34 +78,12 @@ fn Gzip? uncompress_from_stream(Allocator allocator, InStream reader)
 
 	if (gz.header.flg & FNAME)
 	{
-		@pool()
-		{
-			ByteWriter name;
-			name.tinit();
-			while (try c = reader.read_byte())
-			{
-				hash.updatec(c);
-				if (!c) break;
-				name.write_byte(c)!;
-			}
-			gz.filename = codepage::decode(allocator, name.array_view(), CodePage.ISO_8859_1)!;
-		};
+		gz.filename = decode_latin1(allocator, reader, &hash)!;
 	}
 
 	if (gz.header.flg & FCOMMENT)
 	{
-		@pool()
-		{
-			ByteWriter comment;
-			comment.tinit();
-			while (try c = reader.read_byte())
-			{
-				hash.updatec(c);
-				if (!c) break;
-				comment.write_byte(c)!;
-			}
-			gz.comment = codepage::decode(allocator, comment.array_view(), CodePage.ISO_8859_1)!;
-		};
+		gz.comment = decode_latin1(allocator, reader, &hash)!;
 	}
 
 	if (gz.header.flg & FHCRC)
@@ -131,11 +109,11 @@ fn char[]? compress(Allocator allocator, char[] src, bool hcrc = false,
 {
 	ByteWriter bw;
 	bw.init(allocator);
-	compress_to_stream(&bw, src, hcrc, extra, name, comment)!;
+	compress_to(&bw, src, hcrc, extra, name, comment)!;
 	return bw.array_view();
 }
 
-fn void? compress_to_stream(OutStream writer, char[] src, bool hcrc = false,
+fn void? compress_to(OutStream writer, char[] src, bool hcrc = false,
 	char[] extra = {}, String name = "", String comment = "")
 {
 	GzipHeader header = {
@@ -161,18 +139,18 @@ fn void? compress_to_stream(OutStream writer, char[] src, bool hcrc = false,
 		}
 		if (name.len)
 		{
-			char[] zname = name.zstr_tcopy()[:name.len+1];
-			char[] enc_name = codepage::encode(tmem, zname, CodePage.ISO_8859_1)!;
-			h.write(enc_name)!;
+			encode_latin1(&h, name)!;
 		}
 		if (comment.len)
 		{
-			char[] zcomment = comment.zstr_tcopy()[:comment.len+1];
-			char[] enc_comment = codepage::encode(tmem, zcomment, CodePage.ISO_8859_1)!;
-			h.write(enc_comment)!;
+			encode_latin1(&h, comment)!;
 		}
-		if (hcrc) io::write_le_short(&h,
-			(ushort)(crc32::hash(h.array_view()) & 0xFF_FF))!;
+		if (hcrc)
+		{
+			ushort hash = (ushort)(crc32::hash(h.array_view()) & 0xFF_FF);
+			io::write_le_short(&h, hash)!;
+		}
+
 		writer.write(h.array_view())!;
 	};
 
@@ -182,6 +160,31 @@ fn void? compress_to_stream(OutStream writer, char[] src, bool hcrc = false,
 	io::write_le_int(writer, src.len & 0xFF_FF_FF_FF)!;
 }
 
+<*
+ read a zero-terminated Latin1 string from reader.
+*>
+fn String? decode_latin1(Allocator allocator, InStream reader, Crc32 *hash) @private => @pool()
+{
+	ByteWriter writer;
+	writer.tinit();
+	while (try c = reader.read_byte())
+	{
+		hash.updatec(c);
+		if (!c) break;
+		writer.write_byte(c)!;
+	}
+	return codepage::decode(allocator, writer.array_view(), CodePage.ISO_8859_1)!;
+}
+
+<*
+ Write a string s as a zero-terminated Latin1 buffer to writer.
+*>
+fn void? encode_latin1(OutStream writer, String s) @private => @pool()
+{
+	writer.write(codepage::encode(tmem, s, CodePage.ISO_8859_1)!)!;
+	writer.write_byte('\0')!;
+}
+
 fn void gzip_fhcrc() @test
 {
 	char[*] data =
@@ -189,7 +192,8 @@ fn void gzip_fhcrc() @test
 
 	Gzip gz = uncompress(mem, &data)!!;
 	defer gz.free();
-	io::printn(gz);
+
+	assert(gz.header.flg & FHCRC);
 }
 
 fn void gzip_fextra() @test
@@ -199,7 +203,10 @@ fn void gzip_fextra() @test
 
 	Gzip gz = uncompress(mem, &data)!!;
 	defer gz.free();
-	io::printn(gz);
+
+	assert(gz.header.flg & FEXTRA);
+	assert(gz.extra.len);
+	test::eq(gz.extra, "data");
 }
 
 fn void gzip_fname() @test
@@ -209,7 +216,10 @@ fn void gzip_fname() @test
 
 	Gzip gz = uncompress(mem, &data)!!;
 	defer gz.free();
-	io::printn(gz);
+
+	assert(gz.header.flg & FNAME);
+	assert(gz.filename.len);
+	test::eq(gz.filename, "foo.c");
 }
 
 fn void gzip_fcomment() @test
@@ -219,23 +229,28 @@ fn void gzip_fcomment() @test
 
 	Gzip gz = uncompress(mem, &data)!!;
 	defer gz.free();
-	io::printn(gz);
+
+	assert(gz.header.flg & FCOMMENT);
+	assert(gz.comment.len);
+	test::eq(gz.comment, "hello");
 }
 
 fn void gzip_round_trip() @test
 {
-	char[] extra = "extra data";
+	char[] extra    = "extra data";
 	String filename = "filename_éä.c";
-	String comment = "comment\nline";
+	String comment  = "comment\nline";
+	char[] data     = "foo bar";
 
-	char[] gz = compress(mem, "hello world", hcrc: true,
+	char[] gz = compress(mem, data, hcrc: true,
 	extra: extra, name: filename, comment: comment)!!;
 	defer allocator::free(mem, gz.ptr);
 
 	Gzip decode = uncompress(mem, gz)!!;
 	defer decode.free();
-	io::printn(decode);
-	assert(decode.extra == extra);
-	assert(decode.filename == filename);
-	assert(decode.comment == comment);
+
+	test::eq(decode.extra, extra);
+	test::eq(decode.filename, filename);
+	test::eq(decode.comment, comment);
+	test::eq(decode.uncompressed, data);
 }
