@@ -257,3 +257,26 @@ fn void test_flate_store() => @pool()
 	assert(inflate == bytes);
 }
 
+fn void test_deflate_embedded_stream() => @pool()
+{
+	String base = "This is a streaming test for DEFLATE. ";
+
+	char[] compressed = flate::compress(mem, base[..])!!;
+	defer free(compressed.ptr);
+
+	usz append_len = compressed.len + 1;
+	char[] append = mem::malloc(append_len)[:append_len];
+	defer free(append.ptr);
+
+	append[:compressed.len] = compressed[..];
+	append[^1] = 'c';
+
+	ByteReader reader;
+	reader.init(append);
+
+	char[] uncompressed = flate::inflate_stream(tmem, &reader)!!;
+	assert((String)uncompressed[..] == base);
+
+	assert(reader.read_byte()!! == 'c');
+}
+
