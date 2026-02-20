@@ -52,46 +52,49 @@ fn Gzip? uncompress(Allocator allocator, char[] src) @inline
 	return uncompress_from(allocator, &&io::wrap_bytes(src));
 }
 
-fn Gzip? uncompress_from(Allocator allocator, InStream reader) => @pool()
+fn Gzip? uncompress_from(Allocator allocator, InStream reader)
 {
 	Gzip gz = { .allocator = allocator };
 	defer catch gz.free();
 
-	ByteWriter header;
-	header.tinit();
-
-	InStream header_reader = (TeeReader){}.init(reader, &header);
-
-	header_reader.read((char[GzipHeader.sizeof]*)&gz.header)!;
-
-	if (gz.header.id.val != GZIP_MAGIC) return CORRUPT_HEADER~;
-	if (gz.header.cm != 8) return CORRUPT_HEADER~;
-	if (gz.header.flg & 0xE0) return CORRUPT_HEADER~;
-
-	if (gz.header.flg & FEXTRA)
+	@pool()
 	{
-		ushort xlen = io::read_le_ushort(header_reader)!;
-		gz.extra = allocator::malloc(allocator, xlen)[:xlen];
-		header_reader.read(gz.extra)!;
-	}
+		ByteWriter header;
+		header.tinit();
 
-	if (gz.header.flg & FNAME)
-	{
-		gz.filename = decode_latin1(allocator, header_reader)!;
-	}
+		InStream header_reader = (TeeReader){}.init(reader, &header);
 
-	if (gz.header.flg & FCOMMENT)
-	{
-		gz.comment = decode_latin1(allocator, header_reader)!;
-	}
+		header_reader.read((char[GzipHeader.sizeof]*)&gz.header)!;
 
-	if (gz.header.flg & FHCRC)
-	{
-		uint crc_hash = crc32::hash(header.array_view());
-		ushort crc16 = (ushort)(crc_hash & 0xFFFF);
-		ushort hcrc = io::read_le_ushort(reader)!;
-		if (crc16 != hcrc) return CORRUPT_HEADER~;
-	}
+		if (gz.header.id.val != GZIP_MAGIC) return CORRUPT_HEADER~;
+		if (gz.header.cm != 8) return CORRUPT_HEADER~;
+		if (gz.header.flg & 0xE0) return CORRUPT_HEADER~;
+
+		if (gz.header.flg & FEXTRA)
+		{
+			ushort xlen = io::read_le_ushort(header_reader)!;
+			gz.extra = allocator::malloc(allocator, xlen)[:xlen];
+			header_reader.read(gz.extra)!;
+		}
+
+		if (gz.header.flg & FNAME)
+		{
+			gz.filename = decode_latin1(allocator, header_reader)!;
+		}
+
+		if (gz.header.flg & FCOMMENT)
+		{
+			gz.comment = decode_latin1(allocator, header_reader)!;
+		}
+
+		if (gz.header.flg & FHCRC)
+		{
+			uint crc_hash = crc32::hash(header.array_view());
+			ushort crc16 = (ushort)(crc_hash & 0xFFFF);
+			ushort hcrc = io::read_le_ushort(reader)!;
+			if (crc16 != hcrc) return CORRUPT_HEADER~;
+		}
+	};
 
 	gz.uncompressed = flate::inflate_stream(allocator, reader)!;
 
@@ -131,6 +134,7 @@ fn void? compress_to(OutStream writer, char[] src, bool hcrc = false,
 	{
 		ByteWriter h;
 		h.tinit();
+
 		h.write((char[GzipHeader.sizeof]*)&header)!;
 		if (extra.len)
 		{
@@ -147,8 +151,8 @@ fn void? compress_to(OutStream writer, char[] src, bool hcrc = false,
 		}
 		if (hcrc)
 		{
-			ushort hash = (ushort)(crc32::hash(h.array_view()) & 0xFF_FF);
-			io::write_le_short(&h, hash)!;
+			uint crc_hash = crc32::hash(h.array_view());
+			io::write_le_short(&h, (ushort)(crc_hash & 0xFF_FF))!;
 		}
 
 		writer.write(h.array_view())!;
@@ -183,15 +187,18 @@ fn void? encode_latin1(OutStream writer, String s) @private => @pool()
 	writer.write_byte('\0')!;
 }
 
+module compress::gzip_test;
+import compress::gzip;
+
 fn void gzip_fhcrc() @test
 {
 	char[*] data =
 	x"1F8B080200000000020B179D010100FEFF008DEF02D201000000";
 
-	Gzip gz = uncompress(mem, &data)!!;
+	Gzip gz = gzip::uncompress(mem, &data)!!;
 	defer gz.free();
 
-	assert(gz.header.flg & FHCRC);
+	assert(gz.header.flg & gzip::FHCRC);
 }
 
 fn void gzip_fextra() @test
@@ -199,10 +206,10 @@ fn void gzip_fextra() @test
 	char[*] data =
 	x"1F8B080400000000020B040064617461010100FEFF008DEF02D201000000";
 
-	Gzip gz = uncompress(mem, &data)!!;
+	Gzip gz = gzip::uncompress(mem, &data)!!;
 	defer gz.free();
 
-	assert(gz.header.flg & FEXTRA);
+	assert(gz.header.flg & gzip::FEXTRA);
 	assert(gz.extra.len);
 	test::eq(gz.extra, "data");
 }
@@ -212,10 +219,10 @@ fn void gzip_fname() @test
 	char[*] data =
 	x"1F8B080800000000020B666F6F2E6300010100FEFF008DEF02D201000000";
 
-	Gzip gz = uncompress(mem, &data)!!;
+	Gzip gz = gzip::uncompress(mem, &data)!!;
 	defer gz.free();
 
-	assert(gz.header.flg & FNAME);
+	assert(gz.header.flg & gzip::FNAME);
 	assert(gz.filename.len);
 	test::eq(gz.filename, "foo.c");
 }
@@ -225,10 +232,10 @@ fn void gzip_fcomment() @test
 	char[*] data =
 	x"1F8B081000000000020B68656C6C6F00010100FEFF008DEF02D201000000";
 
-	Gzip gz = uncompress(mem, &data)!!;
+	Gzip gz = gzip::uncompress(mem, &data)!!;
 	defer gz.free();
 
-	assert(gz.header.flg & FCOMMENT);
+	assert(gz.header.flg & gzip::FCOMMENT);
 	assert(gz.comment.len);
 	test::eq(gz.comment, "hello");
 }
@@ -240,11 +247,11 @@ fn void gzip_round_trip() @test
 	String comment  = "comment\nline";
 	char[] data     = "foo bar";
 
-	char[] gz = compress(mem, data, hcrc: true,
+	char[] gz = gzip::compress(mem, data, hcrc: true,
 	extra: extra, name: filename, comment: comment)!!;
 	defer allocator::free(mem, gz.ptr);
 
-	Gzip decode = uncompress(mem, gz)!!;
+	Gzip decode = gzip::uncompress(mem, gz)!!;
 	defer decode.free();
 
 	test::eq(decode.extra, extra);
