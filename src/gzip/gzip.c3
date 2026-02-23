@@ -1,16 +1,10 @@
 // Copyright (c) 2026 Koni Marti. All rights reserved.
 // Use of this source code is governed by the MIT license.
 module compress::gzip;
-import std::io, std::encoding::codepage, std::hash::crc32, compress::flate;
+import std::io, std::hash::crc32;
+import compress::flate;
 
 faultdef CORRUPT_HEADER, CORRUPT_DATA;
-
-const ushort GZIP_MAGIC  = 0x8b1f;
-
-const char FHCRC    = 1 << 1;
-const char FEXTRA   = 1 << 2;
-const char FNAME    = 1 << 3;
-const char FCOMMENT = 1 << 4;
 
 struct GzipHeader @packed
 {
@@ -43,26 +37,26 @@ fn void Gzip.free(&self)
 
 fn char[]? uncompress_bytes(Allocator allocator, char[] src) @inline => @pool()
 {
-	Gzip gz = uncompress_from(tmem, &&io::wrap_bytes(src))!;
+	Gzip gz = uncompress_stream(tmem, &&io::wrap_bytes(src))!;
 	return allocator::clone_slice(allocator, gz.uncompressed);
 }
 
 fn Gzip? uncompress(Allocator allocator, char[] src) @inline
 {
-	return uncompress_from(allocator, &&io::wrap_bytes(src));
+	return uncompress_stream(allocator, &&io::wrap_bytes(src));
 }
 
-fn Gzip? uncompress_from(Allocator allocator, InStream reader)
+fn Gzip? uncompress_stream(Allocator allocator, InStream reader)
 {
 	Gzip gz = { .allocator = allocator };
 	defer catch gz.free();
 
 	@pool()
 	{
-		ByteWriter header;
-		header.tinit();
+		CrcHasher crc;
+		crc.init();
 
-		InStream header_reader = (TeeReader){}.init(reader, &header);
+		InStream header_reader = (TeeReader){}.init(reader, &crc);
 
 		header_reader.read((char[GzipHeader.sizeof]*)&gz.header)!;
 
@@ -89,8 +83,7 @@ fn Gzip? uncompress_from(Allocator allocator, InStream reader)
 
 		if (gz.header.flg & FHCRC)
 		{
-			uint crc_hash = crc32::hash(header.array_view());
-			ushort crc16 = (ushort)(crc_hash & 0xFFFF);
+			ushort crc16 = (ushort)(crc.hash.final() & 0xFFFF);
 			ushort hcrc = io::read_le_ushort(reader)!;
 			if (crc16 != hcrc) return CORRUPT_HEADER~;
 		}
@@ -112,11 +105,11 @@ fn char[]? compress(Allocator allocator, char[] src, bool hcrc = false,
 {
 	ByteWriter bw;
 	bw.init(allocator);
-	compress_to(&bw, src, hcrc, extra, name, comment)!;
+	compress_stream(&bw, src, hcrc, extra, name, comment)!;
 	return bw.array_view();
 }
 
-fn void? compress_to(OutStream writer, char[] src, bool hcrc = false,
+fn void? compress_stream(OutStream writer, char[] src, bool hcrc = false,
 	char[] extra = {}, String name = "", String comment = "")
 {
 	GzipHeader header = {
@@ -164,10 +157,45 @@ fn void? compress_to(OutStream writer, char[] src, bool hcrc = false,
 	io::write_le_int(writer, src.len & 0xFF_FF_FF_FF)!;
 }
 
+module compress::gzip @private;
+import std::io, std::encoding::codepage, std::hash::crc32;
+
+const ushort GZIP_MAGIC  = 0x8b1f;
+
+const char FHCRC    = 1 << 1;
+const char FEXTRA   = 1 << 2;
+const char FNAME    = 1 << 3;
+const char FCOMMENT = 1 << 4;
+
+struct CrcHasher (OutStream)
+{
+	Crc32 hash;
+	usz written;
+}
+
+fn void CrcHasher.init(&self)
+{
+	self.hash.init();
+	self.written = 0;
+}
+
+fn usz? CrcHasher.write(&self, char[] bytes) @dynamic
+{
+	self.hash.update(bytes);
+	self.written += bytes.len;
+	return bytes.len;
+}
+
+fn void? CrcHasher.write_byte(&self, char c) @dynamic
+{
+	self.hash.updatec(c);
+	self.written += 1;
+}
+
 <*
  read a zero-terminated Latin1 string from reader.
 *>
-fn String? decode_latin1(Allocator allocator, InStream reader) @private => @pool()
+fn String? decode_latin1(Allocator allocator, InStream reader) => @pool()
 {
 	ByteWriter writer;
 	writer.tinit();
@@ -181,14 +209,14 @@ fn String? decode_latin1(Allocator allocator, InStream reader) @private => @pool
 <*
  Write a string s as a zero-terminated Latin1 buffer to writer.
 *>
-fn void? encode_latin1(OutStream writer, String s) @private => @pool()
+fn void? encode_latin1(OutStream writer, String s) => @pool()
 {
 	writer.write(codepage::encode(tmem, s, CodePage.ISO_8859_1)!)!;
 	writer.write_byte('\0')!;
 }
 
 module compress::gzip_test;
-import compress::gzip;
+import compress::gzip @public;
 
 fn void gzip_fhcrc() @test
 {
