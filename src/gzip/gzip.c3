@@ -53,7 +53,7 @@ fn Gzip? uncompress_stream(Allocator allocator, InStream reader)
 
 	@pool()
 	{
-		CrcHasher crc;
+		CrcWriter crc;
 		crc.init();
 
 		InStream header_reader = (TeeReader){}.init(reader, &crc);
@@ -83,7 +83,7 @@ fn Gzip? uncompress_stream(Allocator allocator, InStream reader)
 
 		if (gz.header.flg & FHCRC)
 		{
-			ushort crc16 = (ushort)(crc.hash.final() & 0xFFFF);
+			ushort crc16 = (ushort)(crc.final() & 0xFFFF);
 			ushort hcrc = io::read_le_ushort(reader)!;
 			if (crc16 != hcrc) return CORRUPT_HEADER~;
 		}
@@ -167,30 +167,28 @@ const char FEXTRA   = 1 << 2;
 const char FNAME    = 1 << 3;
 const char FCOMMENT = 1 << 4;
 
-struct CrcHasher (OutStream)
+struct CrcWriter (OutStream)
 {
 	Crc32 hash;
-	usz written;
 }
 
-fn void CrcHasher.init(&self)
+fn void CrcWriter.init(&self)
 {
 	self.hash.init();
-	self.written = 0;
 }
 
-fn usz? CrcHasher.write(&self, char[] bytes) @dynamic
+fn usz? CrcWriter.write(&self, char[] bytes) @dynamic
 {
 	self.hash.update(bytes);
-	self.written += bytes.len;
 	return bytes.len;
 }
 
-fn void? CrcHasher.write_byte(&self, char c) @dynamic
+fn void? CrcWriter.write_byte(&self, char c) @dynamic
 {
 	self.hash.updatec(c);
-	self.written += 1;
 }
+
+fn uint CrcWriter.final(&self) => self.hash.final();
 
 <*
  read a zero-terminated Latin1 string from reader.
