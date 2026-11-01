@@ -128,6 +128,8 @@ is also decoded by the other library to check interoperability.
 | | | std | 100.10% | 89.2 | 338.8 |
 | zeros (synthetic) | 8 MB | compress.c3l | 0.10% | **5 892** | **1 015** |
 | | | std | 0.10% | 1 454 | 580.6 |
+| large mixed (text + binary) | 519 MB | compress.c3l | **31.57%** | **100.5** | **536.5** |
+| | | std | 32.54% | 93.4 | 269.6 |
 
 Speed ratio compress.c3l/std: compression 1.01x–7.3x on the non‑trivial inputs
 (1.05–1.07x on text and binary), decompression 1.14x–1.75x on compressible
@@ -135,6 +137,10 @@ data. The decompression figure for random data is a plain copy of stored
 blocks. The gains on compression are modest on real data; the match finder is
 the same class of algorithm as std's, and the biggest wins come from the
 decoder and from handling incompressible and highly repetitive input.
+
+The large input is 85 copies of the text file followed by 16 copies of the
+binary. Inputs of 4 GiB or more are not supported by `compress.c3l`'s
+encoder yet (positions are 32‑bit).
 
 Setup: Intel Core i7‑14700, WSL2 (Linux 6.18), c3c 0.8.6 with `-O3`, single
 thread. Numbers vary by machine; reproduce with:
