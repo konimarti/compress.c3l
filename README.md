@@ -118,18 +118,18 @@ is also decoded by the other library to check interoperability.
 
 | input | size | lib | ratio | compress MB/s | decompress MB/s |
 |---|---:|---|---:|---:|---:|
-| text (c3 stdlib sources) | 3.1 MB | c3l | **23.82%** | **129.8** | **745.2** |
+| text (c3 stdlib sources) | 3.1 MB | compress.c3l | **23.82%** | **129.8** | **745.2** |
 | | | std | 24.87% | 121.4 | 431.9 |
-| binary (c3c executable) | 16 MB | c3l | **39.52%** | **83.8** | **508.6** |
+| binary (c3c executable) | 16 MB | compress.c3l | **39.52%** | **83.8** | **508.6** |
 | | | std | 40.39% | 79.5 | 295.0 |
-| skewed random bytes (synthetic) | 8 MB | c3l | **56.97%** | **64.9** | **310.7** |
+| skewed random bytes (synthetic) | 8 MB | compress.c3l | **56.97%** | **64.9** | **310.7** |
 | | | std | 61.39% | 64.1 | 271.8 |
-| random bytes (synthetic) | 8 MB | c3l | **100.02%** | **649.4** | **32 743** |
+| random bytes (synthetic) | 8 MB | compress.c3l | **100.02%** | **649.4** | **32 743** |
 | | | std | 100.10% | 89.2 | 338.8 |
-| zeros (synthetic) | 8 MB | c3l | 0.10% | **5 892** | **1 015** |
+| zeros (synthetic) | 8 MB | compress.c3l | 0.10% | **5 892** | **1 015** |
 | | | std | 0.10% | 1 454 | 580.6 |
 
-Speed ratio c3l/std: compression 1.01x–7.3x on the non‑trivial inputs
+Speed ratio compress.c3l/std: compression 1.01x–7.3x on the non‑trivial inputs
 (1.05–1.07x on text and binary), decompression 1.14x–1.75x on compressible
 data. The decompression figure for random data is a plain copy of stored
 blocks. The gains on compression are modest on real data; the match finder is
