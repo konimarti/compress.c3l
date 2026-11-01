@@ -51,28 +51,54 @@ fn void? HuffDecoder.build(&self, char[] lengths)
 	}
 }
 
+const usz INFLATE_CAP = 1U << 20;   // Output buffer of the streaming modes.
+const usz INFLATE_WINDOW = 1U << 15;  // History that must stay available.
+const usz INFLATE_CHUNK = 1U << 15;   // Input read-ahead of the streaming modes.
+const usz INFLATE_HEADROOM = 8;       // Bytes of the previous chunk kept in front of inbuf.
+
+enum InflateState : char
+{
+	BLOCK_HEADER,
+	BLOCK_CODES,
+	DONE,
+}
+
 <*
- Inflater holds the complete state of one DEFLATE decode. Input comes either
- from a slice (fast path, bulk refills) or from a generic InStream, in which
- case bytes are pulled strictly on demand so nothing past the stream is read.
+ Inflater holds the complete state of one DEFLATE decode.
+
+ Input comes from a slice (bulk refills), from a buffered InStream
+ (read ahead in chunks), or from an InStream byte by byte (exact: nothing
+ past the DEFLATE stream is consumed).
+
+ Output either accumulates in a growing buffer (one-shot), is flushed to a
+ sink when the buffer fills, or is handed out incrementally by InflateReader.
+ The streaming variants keep the last 32 KiB around as match history.
 *>
 struct Inflater
 {
 	char[] src;
 	usz pos;
 	InStream stream;
+	bool exact;
+	char[] inbuf;
 	ulong bits;
 	uint nbits;
 	char[] buf;
 	usz n;
+	usz emitted;      // Output before this offset has been handed out.
+	OutStream sink;
+	bool fixed_buf;   // Output buffer must not grow (reader mode).
+	usz yield_at;     // Stop decoding once n reaches this (reader mode).
 	Allocator allocator;
+	InflateState state;
+	bool last;
 	HuffDecoder lit;
 	HuffDecoder dist;
 }
 
 fn void Inflater.refill(&self) @inline
 {
-	if (self.stream) return;
+	if (self.exact) return;
 	if (self.pos + 8 <= self.src.len)
 	{
 		self.bits |= mem::load((ulong*)&self.src[self.pos], 1) << self.nbits;
@@ -87,10 +113,26 @@ fn void Inflater.refill(&self) @inline
 	}
 }
 
+<* Reads the next chunk of a buffered stream into src; false at the end. *>
+fn bool Inflater.fetch(&self)
+{
+	if (!self.stream || self.exact) return false;
+	// Keep the tail of the previous chunk right before the new one so that
+	// leftover() can reach bytes that were already moved into the bit buffer.
+	usz tail = self.src.len < INFLATE_HEADROOM ? self.src.len : INFLATE_HEADROOM;
+	if (tail > 0) mem::move(self.inbuf.ptr + (sz)(INFLATE_HEADROOM - tail), self.src.ptr + (sz)(self.src.len - tail), (sz)tail);
+	sz? k = self.stream.read(self.inbuf[INFLATE_HEADROOM..]);
+	if (catch k) return false;
+	if (k <= 0) return false;
+	self.src = self.inbuf[INFLATE_HEADROOM:k];
+	self.pos = 0;
+	return true;
+}
+
 <* Pulls one more byte into the bit buffer; false on end of input. *>
 fn bool Inflater.pull(&self)
 {
-	if (self.stream)
+	if (self.exact)
 	{
 		char? c = self.stream.read_byte();
 		if (catch c) return false;
@@ -98,7 +140,10 @@ fn bool Inflater.pull(&self)
 		self.nbits += 8;
 		return true;
 	}
-	if (self.pos >= self.src.len) return false;
+	if (self.pos >= self.src.len)
+	{
+		if (!self.fetch()) return false;
+	}
 	self.bits |= (ulong)self.src[self.pos++] << self.nbits;
 	self.nbits += 8;
 	return true;
@@ -162,14 +207,38 @@ fn int? Inflater.decode_slow(&self, HuffDecoder *h)
 	return INVALID_CODE~;
 }
 
-fn void Inflater.reserve(&self, usz extra) @inline
+<* Hands the unflushed output to the sink and keeps the last window as history. *>
+fn void? Inflater.flush_sink(&self)
 {
-	if (self.n + extra + 16 > self.buf.len)
+	char[] out = self.buf[self.emitted:self.n - self.emitted];
+	while (out.len > 0)
 	{
-		usz cap = self.buf.len * 2;
-		if (cap < self.n + extra + 16) cap = self.n + extra + 16;
-		self.buf = alloc::realloc_array(self.allocator, self.buf.ptr, char, (sz)cap);
+		sz k = self.sink.write(out)!;
+		out = out[k..];
 	}
+	usz keep = self.n < INFLATE_WINDOW ? self.n : INFLATE_WINDOW;
+	mem::move(self.buf.ptr, self.buf.ptr + (self.n - keep), (sz)keep);
+	self.n = keep;
+	self.emitted = keep;
+}
+
+fn void? Inflater.reserve(&self, usz extra) @inline
+{
+	if (self.n + extra + 16 <= self.buf.len) return;
+	self.make_room(extra)!;
+}
+
+fn void? Inflater.make_room(&self, usz extra)
+{
+	if (self.sink)
+	{
+		self.flush_sink()!;
+		return;
+	}
+	assert(!self.fixed_buf, "output buffer overrun");
+	usz cap = self.buf.len * 2;
+	if (cap < self.n + extra + 16) cap = self.n + extra + 16;
+	self.buf = alloc::realloc_array(self.allocator, self.buf.ptr, char, (sz)cap)[:cap];
 }
 
 fn void? Inflater.stored_block(&self)
@@ -183,36 +252,36 @@ fn void? Inflater.stored_block(&self)
 	uint inv = self.getbits(16)!;
 	if (length != (~inv & 0xFFFF)) return INVALID_LENGTH~;
 
-	self.reserve(length);
 	// Bytes still sitting in the bit buffer come first.
 	while (length > 0 && self.nbits > 0)
 	{
+		self.reserve(1)!;
 		self.buf[self.n++] = (char)self.getbits(8)!;
 		length--;
 	}
-	if (length == 0) return;
-	if (self.stream)
+	while (length > 0)
 	{
-		while (length > 0)
+		if (self.exact)
 		{
+			self.reserve(1)!;
 			self.buf[self.n++] = self.stream.read_byte()!;
 			length--;
+			continue;
 		}
-		return;
+		if (self.pos >= self.src.len)
+		{
+			if (!self.fetch()) return TRUNCATED_INPUT~;
+		}
+		usz k = self.src.len - self.pos;
+		if (k > length) k = length;
+		self.reserve(k)!;
+		self.buf[self.n:k] = self.src[self.pos:k];
+		self.n += k;
+		self.pos += k;
+		length -= (uint)k;
 	}
-	if (self.pos + length > self.src.len) return TRUNCATED_INPUT~;
-	self.buf[self.n:length] = self.src[self.pos:length];
-	self.n += length;
-	self.pos += length;
 	// Drop stale look-ahead bits left by the bulk refill.
 	self.bits = 0;
-}
-
-fn void? Inflater.fixed_block(&self)
-{
-	self.lit.build(huff::FIXED_LITERAL_LENGTH_CODE_LENGTHS)!;
-	self.dist.build(huff::FIXED_DISTANCE_CODE_LENGTHS)!;
-	return self.codes();
 }
 
 fn void? Inflater.dynamic_block(&self)
@@ -256,24 +325,25 @@ fn void? Inflater.dynamic_block(&self)
 	}
 	self.lit.build(lengths[0:nlit])!;
 	self.dist.build(lengths[nlit:ndist])!;
-	return self.codes();
 }
 
 <*
- Decodes the symbols of one compressed block using the current tables.
+ Decodes the symbols of the current block. Returns true at the end of the
+ block, false if decoding paused because yield_at was reached.
 *>
-fn void? Inflater.codes(&self)
+fn bool? Inflater.codes(&self)
 {
 	while (true)
 	{
+		if (self.n >= self.yield_at) return false;
 		int sym = self.decode(&self.lit)!;
 		if (sym < 256)
 		{
-			self.reserve(1);
+			self.reserve(1)!;
 			self.buf[self.n++] = (char)sym;
 			continue;
 		}
-		if (sym == END_OF_BLOCK) return;
+		if (sym == END_OF_BLOCK) return true;
 		sym -= 257;
 		if (sym >= 29) return INVALID_CODE~;
 		uint length = len_base[sym] + self.getbits(len_extra[sym])!;
@@ -283,7 +353,7 @@ fn void? Inflater.codes(&self)
 		uint off = dist_base[ds] + self.getbits(dist_extra[ds])!;
 		if (off > self.n) return INVALID_DISTANCE~;
 
-		self.reserve(length);
+		self.reserve(length)!;
 		char* dst = &self.buf[self.n];
 		char* from = dst - off;
 		if (off >= 8)
@@ -302,22 +372,147 @@ fn void? Inflater.codes(&self)
 }
 
 <*
- Runs the block loop until BFINAL; returns the output buffer.
+ Decodes blocks until the stream ends or yield_at is reached.
+*>
+fn void? Inflater.step(&self)
+{
+	while (self.state != DONE)
+	{
+		if (self.n >= self.yield_at) return;
+		if (self.state == BLOCK_HEADER)
+		{
+			if (self.last)
+			{
+				self.state = DONE;
+				break;
+			}
+			self.last = self.getbits(1)! == 1;
+			switch (self.getbits(2)!)
+			{
+				case 0:
+					self.stored_block()!;
+				case 1:
+					self.lit.build(huff::FIXED_LITERAL_LENGTH_CODE_LENGTHS)!;
+					self.dist.build(huff::FIXED_DISTANCE_CODE_LENGTHS)!;
+					self.state = BLOCK_CODES;
+				case 2:
+					self.dynamic_block()!;
+					self.state = BLOCK_CODES;
+				default:
+					return INVALID_BLOCK_TYPE~;
+			}
+			continue;
+		}
+		if (self.codes()!) self.state = BLOCK_HEADER;
+	}
+}
+
+<*
+ Runs the whole stream and returns the accumulated output (one-shot mode).
 *>
 fn char[]? Inflater.run(&self)
 {
-	if (self.buf.len == 0) self.reserve(self.src.len * 4 + 1024);
-	uint bfinal;
-	do
-	{
-		bfinal = self.getbits(1)!;
-		switch (self.getbits(2)!)
-		{
-			case 0: self.stored_block()!;
-			case 1: self.fixed_block()!;
-			case 2: self.dynamic_block()!;
-			default: return INVALID_BLOCK_TYPE~;
-		}
-	} while (!bfinal);
+	self.yield_at = usz::max;
+	if (self.buf.len == 0) self.reserve(self.src.len * 4 + 1024)!;
+	self.step()!;
 	return self.buf[:self.n];
+}
+
+<* Number of whole input bytes read but not part of the DEFLATE stream. *>
+fn usz Inflater.unused(&self) @inline => self.nbits / 8;
+
+// ------------------------------------------------------------- streaming
+
+<*
+ InflateReader is an InStream that decompresses a DEFLATE stream read from
+ another InStream, using constant memory (about 1 MiB) however large the data
+ is. The source is read ahead in chunks, so more than the DEFLATE stream may be
+ consumed from it; leftover() returns the surplus once the stream has ended.
+ Call free() when done.
+*>
+struct InflateReader (InStream)
+{
+	Inflater inf;
+	Allocator allocator;
+}
+
+fn void InflateReader.init(&self, Allocator allocator, InStream source)
+{
+	*self = {};
+	self.allocator = allocator;
+	self.inf.allocator = allocator;
+	self.inf.stream = source;
+	self.inf.fixed_buf = true;
+	self.inf.buf = alloc::new_array(allocator, char, (sz)INFLATE_CAP)[:INFLATE_CAP];
+	self.inf.inbuf = alloc::new_array(allocator, char, (sz)(INFLATE_CHUNK + INFLATE_HEADROOM))[:INFLATE_CHUNK + INFLATE_HEADROOM];
+}
+
+fn void InflateReader.free(&self)
+{
+	alloc::free(self.allocator, self.inf.buf.ptr);
+	alloc::free(self.allocator, self.inf.inbuf.ptr);
+	*self = {};
+}
+
+<*
+ Bytes that were read from the source but are not part of the DEFLATE stream.
+ Only meaningful after read() has returned 0. Valid until the next read.
+*>
+fn char[] InflateReader.leftover(&self)
+{
+	Inflater* f = &self.inf;
+	if (f.state != DONE) return {};
+	usz back = f.unused();
+	return (f.src.ptr + (sz)(f.pos - back))[:f.src.len - f.pos + back];
+}
+
+fn sz? InflateReader.read(&self, char[] out) @dynamic
+{
+	if (out.len == 0) return 0;
+	Inflater* f = &self.inf;
+	while (f.emitted == f.n)
+	{
+		if (f.state == DONE) return 0;
+		// Everything was handed out: make room, keeping the history window.
+		if (f.n + 100_000 > f.buf.len)
+		{
+			usz keep = f.n < INFLATE_WINDOW ? f.n : INFLATE_WINDOW;
+			mem::move(f.buf.ptr, f.buf.ptr + (f.n - keep), (sz)keep);
+			f.n = keep;
+			f.emitted = keep;
+		}
+		f.yield_at = f.n + INFLATE_WINDOW;
+		f.step()!;
+	}
+	usz k = f.n - f.emitted;
+	if (k > out.len) k = out.len;
+	out[:k] = f.buf[f.emitted:k];
+	f.emitted += k;
+	return (sz)k;
+}
+
+fn char? InflateReader.read_byte(&self) @dynamic
+{
+	char[1] one;
+	if (self.read(&one)! == 0) return io::EOF~;
+	return one[0];
+}
+
+<*
+ Decompresses the DEFLATE stream read from source and writes it to out using
+ constant memory. The source is read ahead in chunks (see InflateReader).
+*>
+fn void? inflate_to(Allocator allocator, OutStream out, InStream source)
+{
+	Inflater f;
+	f.allocator = allocator;
+	f.stream = source;
+	f.sink = out;
+	f.buf = alloc::new_array(allocator, char, (sz)INFLATE_CAP)[:INFLATE_CAP];
+	f.inbuf = alloc::new_array(allocator, char, (sz)(INFLATE_CHUNK + INFLATE_HEADROOM))[:INFLATE_CHUNK + INFLATE_HEADROOM];
+	defer alloc::free(allocator, f.buf.ptr);
+	defer alloc::free(allocator, f.inbuf.ptr);
+	f.yield_at = usz::max;
+	f.step()!;
+	f.flush_sink()!;
 }

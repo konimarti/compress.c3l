@@ -62,6 +62,7 @@ struct Deflater @private
 	// Bit writer.
 	char* obuf;
 	usz opos;
+	usz total_out;
 	ulong acc;
 	uint nacc;
 
@@ -135,6 +136,7 @@ fn void? Deflater.send(&self)
 {
 	if (self.opos == 0) return;
 	self.out.write(self.obuf[:self.opos])!;
+	self.total_out += self.opos;
 	self.opos = 0;
 }
 
@@ -419,6 +421,45 @@ fn void? Deflater.flush_block(&self, bool last) => @pool()
 const usz SEGMENT = 1U << 30;
 const usz STREAM_BUF = BLOCK_TOKENS * 6 + 4096;
 
+<* Allocates the working memory; pass tmem for one-shot use. *>
+fn void Deflater.init(&self, Allocator allocator, OutStream out, DeflateMode mode, DeflateParams params)
+{
+	*self = {};
+	self.out = out;
+	self.params = params;
+	self.mode = mode;
+	self.setup();
+	self.head = alloc::new_array(allocator, uint, 1U << FAST_HASH_BITS);
+	self.prev = alloc::new_array(allocator, ushort, FAST_WSIZE);
+	self.tokens = alloc::new_array(allocator, uint, BLOCK_TOKENS);
+	// Stored blocks may need up to 64K plus headers on top of the token area.
+	self.obuf = alloc::new_array(allocator, char, STREAM_BUF + 65536 + 64);
+}
+
+fn void Deflater.release(&self, Allocator allocator)
+{
+	alloc::free(allocator, self.head);
+	alloc::free(allocator, self.prev);
+	alloc::free(allocator, self.tokens);
+	alloc::free(allocator, self.obuf);
+	self.head = null;
+	self.prev = null;
+	self.tokens = null;
+	self.obuf = null;
+}
+
+<* Writes the final empty stored block of an empty stream. *>
+fn void? Deflater.write_empty(&self)
+{
+	self.put(1, 1);
+	self.put(0, 2);
+	self.drain(true);
+	self.put(0, 16);
+	self.put(0xFFFF, 16);
+	self.drain(true);
+	self.send()!;
+}
+
 <*
  Compresses bytes into a complete DEFLATE stream written to out.
 *>
@@ -426,29 +467,10 @@ fn void? deflate_fast(OutStream out, char[] bytes, DeflateMode mode = AUTO,
 	DeflateParams params = DEFAULT_PARAMS) => @pool()
 {
 	Deflater d;
-	d.out = out;
-	d.params = params;
-	d.mode = mode;
-	d.input = bytes;
-	d.setup();
+	d.init(tmem, out, mode, params);
 
 	usz n = bytes.len;
-	d.head = alloc::new_array(tmem, uint, 1U << FAST_HASH_BITS);
-	d.prev = alloc::new_array(tmem, ushort, FAST_WSIZE);
-	d.tokens = alloc::new_array(tmem, uint, BLOCK_TOKENS);
-	// Stored blocks may need up to 64K plus headers on top of the token area.
-	d.obuf = alloc::new_array(tmem, char, STREAM_BUF + 65536 + 64);
-
-	if (n == 0)
-	{
-		d.put(1, 1);
-		d.put(0, 2);
-		d.drain(true);
-		d.put(0, 16);
-		d.put(0xFFFF, 16);
-		d.drain(true);
-		return d.send();
-	}
+	if (n == 0) return d.write_empty();
 
 	// The matcher uses 32-bit positions, so huge inputs are processed in
 	// segments. Matches do not cross segment boundaries, which costs at most
@@ -467,24 +489,27 @@ fn void? deflate_fast(OutStream out, char[] bytes, DeflateMode mode = AUTO,
 			continue;
 		}
 		mem::clear(d.head, (usz)(4U << FAST_HASH_BITS));
-		d.run_segment(last)!;
+		d.run(0, (uint)len)!;
+		d.flush_block(last)!;
 	}
 	d.drain(true);
 	d.send()!;
 }
 
-<* Compresses d.input as one segment; BFINAL is set only if last. *>
-fn void? Deflater.run_segment(&self, bool last)
+<*
+ Tokenizes input[p:limit] (the matcher may look ahead up to the end of
+ d.input) and returns the position where it stopped, which is at least limit.
+*>
+fn uint? Deflater.run(&self, uint p, uint limit)
 {
 	Deflater* d = self;
 	char[] bytes = self.input;
 	uint end = (uint)bytes.len;
-	uint p = 0;
 	uint cl = 0;
 	uint cd = 0;
 	bool have = false;
 	uint misses = 0;
-	while (p < end)
+	while (p < limit || have)
 	{
 		if (p + 8 > end)
 		{
@@ -539,7 +564,7 @@ fn void? Deflater.run_segment(&self, bool last)
 		p += cl;
 		// Very long matches are mostly redundant: index the start and the
 		// tail only, which keeps highly repetitive input fast.
-		if (cl > 64 && q + 32 < p) 
+		if (cl > 64 && q + 32 < p)
 		{
 			for (uint stop = q + 16; q < stop; q++) d.insert(q);
 			q = p - 16;
@@ -549,9 +574,141 @@ fn void? Deflater.run_segment(&self, bool last)
 			if (q + 8 <= end) d.insert(q);
 		}
 	}
-	d.flush_block(last)!;
+	return p;
 }
 
+// ------------------------------------------------------------ streaming writer
+
+faultdef STREAM_CLOSED;
+
+const usz WRITER_BUF = (1U << 20) + FAST_WSIZE;
+const uint LOOKAHEAD = 262;
+
+<*
+ DeflateWriter is an OutStream that compresses everything written to it and
+ forwards the DEFLATE stream to the wrapped OutStream. Memory use is constant
+ (about 1.5 MiB) regardless of the amount of data. Call close() after the last
+ write to emit the final block, then free().
+
+ Matches may reach back up to 32 KiB across internal chunk boundaries.
+*>
+struct DeflateWriter (OutStream)
+{
+	Deflater d;
+	Allocator allocator;
+	char[] buf;  // 32 KiB history followed by new data.
+	uint fill;   // Valid bytes in buf.
+	uint p;      // First byte not yet tokenized.
+	bool closed;
+	ulong total_in; // Bytes written so far.
+}
+
+fn void DeflateWriter.init(&self, Allocator allocator, OutStream out,
+	DeflateMode mode = AUTO, DeflateParams params = DEFAULT_PARAMS)
+{
+	*self = {};
+	self.allocator = allocator;
+	self.d.init(allocator, out, mode, params);
+	self.buf = alloc::new_array(allocator, char, (sz)WRITER_BUF)[:WRITER_BUF];
+}
+
+<* Releases the working memory. Does not close the stream; call close() first. *>
+fn void DeflateWriter.free(&self)
+{
+	self.d.release(self.allocator);
+	alloc::free(self.allocator, self.buf.ptr);
+	*self = {};
+}
+
+fn void? DeflateWriter.process(&self, bool final)
+{
+	Deflater* d = &self.d;
+	d.input = self.buf[:self.fill];
+	d.block_start = self.p;
+	if (d.mode == STORED)
+	{
+		if (self.fill > self.p || final) d.write_stored(self.p, self.fill - self.p, final)!;
+		self.p = self.fill;
+		return;
+	}
+	uint limit = self.fill;
+	if (!final) limit = self.fill > LOOKAHEAD ? self.fill - LOOKAHEAD : 0;
+	if (self.p < limit) self.p = d.run(self.p, limit)!;
+	// Blocks never span chunks, so stored blocks can read their raw bytes.
+	if (d.ntok > 0 || final) d.flush_block(final)!;
+	if (!final) d.send()!;
+}
+
+<* Drops old history from the front of the buffer, keeping at least one window. *>
+fn void DeflateWriter.slide(&self)
+{
+	if (self.p < 2 * FAST_WSIZE) return;
+	uint delta = (self.p - FAST_WSIZE) & ~FAST_WMASK;
+	mem::move(self.buf.ptr, self.buf.ptr + delta, (sz)(self.fill - delta));
+	self.fill -= delta;
+	self.p -= delta;
+	for (usz i = 0; i < (1U << FAST_HASH_BITS); i++)
+	{
+		uint e = self.d.head[i];
+		self.d.head[i] = e > delta ? e - delta : 0;
+	}
+}
+
+fn sz? DeflateWriter.write(&self, char[] bytes) @dynamic
+{
+	if (self.closed) return STREAM_CLOSED~;
+	sz total = bytes.len;
+	self.total_in += bytes.len;
+	while (bytes.len > 0)
+	{
+		usz room = self.buf.len - self.fill;
+		if (room == 0)
+		{
+			self.process(false)!;
+			self.slide();
+			continue;
+		}
+		usz k = room < bytes.len ? room : bytes.len;
+		self.buf[self.fill:k] = bytes[:k];
+		self.fill += (uint)k;
+		bytes = bytes[k..];
+	}
+	return total;
+}
+
+fn void? DeflateWriter.write_byte(&self, char c) @dynamic
+{
+	char[1] one = { c };
+	self.write(&one)!;
+}
+
+<*
+ Finishes the DEFLATE stream (final block, bit padding). Does not close the
+ wrapped stream. Calling it again does nothing.
+*>
+fn void? DeflateWriter.close(&self) @dynamic
+{
+	if (self.closed) return;
+	self.closed = true;
+	if (self.total_in == 0) return self.d.write_empty();
+	self.process(true)!;
+	self.d.drain(true);
+	self.d.send()!;
+}
+
+<*
+ Compresses everything read from in and writes the DEFLATE stream to out,
+ using constant memory.
+*>
+fn void? deflate_from(Allocator allocator, OutStream out, InStream in,
+	DeflateMode mode = AUTO) => @pool()
+{
+	DeflateWriter w;
+	w.init(allocator, out, mode);
+	defer w.free();
+	io::copy_to(in, &w, mem::talloc_array(char, 65536))!;
+	w.close()!;
+}
 
 module compress::flate::fast_test;
 import std::io;
@@ -637,4 +794,108 @@ fn void test_fast_code_length_runs() @test => @pool()
 	foreach (i, &c : data) *c = (i % 5000 < 4000) ? 'a' : (char)(i * 31);
 	char[] comp = flate::deflate(tmem, data, DYNAMIC)!!;
 	assert(flate::inflate(tmem, comp)!! == data);
+}
+
+module compress::flate::stream_test;
+import std::io, compress::flate;
+
+fn char[] sample(usz size) @private
+{
+	char[] data = mem::talloc_array(char, (sz)size);
+	uint x = 4242;
+	foreach (i, &c : data)
+	{
+		x = x * 1664525 + 1013904223;
+		// Text-like regions, runs and noise so every block type shows up.
+		switch ((int)((i / 40_000) % 3))
+		{
+			case 0:  *c = (char)(97 + (int)((x >> 24) & 7) + (int)(i % 5));
+			case 1:  *c = (char)(i % 17);
+			default: *c = (char)(x >> 24);
+		}
+	}
+	return data;
+}
+
+fn void test_stream_roundtrip() @test => @pool()
+{
+	// Larger than the writer buffer so several chunks and slides happen.
+	char[] data = sample(3_500_000);
+	ByteWriter comp;
+	comp.tinit();
+	DeflateWriter w;
+	w.init(mem, &comp);
+	defer w.free();
+	// Odd write sizes, including single bytes.
+	usz off;
+	usz step = 1;
+	while (off < data.len)
+	{
+		usz k = step < data.len - off ? step : data.len - off;
+		w.write(data[off:k])!!;
+		off += k;
+		step = step * 3 + 1;
+		if (step > 700_000) step = 1;
+	}
+	w.close()!!;
+
+	// One-shot decoder reads what the streaming encoder produced.
+	assert(flate::inflate(tmem, comp.array_view())!! == data);
+
+	// Streaming decoder with small reads.
+	ByteReader src;
+	src.init(comp.array_view());
+	InflateReader r;
+	r.init(mem, &src);
+	defer r.free();
+	ByteWriter back;
+	back.tinit();
+	char[777] chunk;
+	while (true)
+	{
+		sz k = r.read(&chunk)!!;
+		if (k == 0) break;
+		back.write(chunk[:k])!!;
+	}
+	assert(back.array_view() == data);
+	assert(r.leftover().len == 0);
+
+	// Sink-based decoder.
+	ByteReader src2;
+	src2.init(comp.array_view());
+	ByteWriter back2;
+	back2.tinit();
+	flate::inflate_to(mem, &back2, &src2)!!;
+	assert(back2.array_view() == data);
+}
+
+fn void test_stream_leftover_and_empty() @test => @pool()
+{
+	// Empty stream.
+	ByteWriter comp;
+	comp.tinit();
+	DeflateWriter w;
+	w.init(mem, &comp);
+	w.close()!!;
+	w.free();
+	assert(flate::inflate(tmem, comp.array_view())!!.len == 0);
+
+	// Bytes after the stream stay available through leftover().
+	char[] text = "streaming leftovers streaming leftovers";
+	ByteWriter c2;
+	c2.tinit();
+	ByteReader tr;
+	tr.init(text);
+	flate::deflate_from(mem, &c2, &tr)!!;
+	c2.write("TRAILER")!!;
+	ByteReader src;
+	src.init(c2.array_view());
+	InflateReader r;
+	r.init(mem, &src);
+	defer r.free();
+	char[256] out;
+	sz k = r.read(&out)!!;
+	assert(out[:k] == text);
+	assert(r.read(&out)!! == 0);
+	assert((String)r.leftover() == "TRAILER");
 }

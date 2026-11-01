@@ -97,7 +97,7 @@ fn char[]? inflate_stream(Allocator allocator, InStream stream)
 		br.index += (sz)inf.pos;
 		return out;
 	}
-	Inflater inf = { .stream = stream, .allocator = allocator };
+	Inflater inf = { .stream = stream, .exact = true, .allocator = allocator };
 	return inf.run();
 }
 

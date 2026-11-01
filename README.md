@@ -106,6 +106,40 @@ fn void example_fixed_block() => @pool()
 }
 ```
 
+### Streaming API
+
+For data that should not be held in memory, `DeflateWriter` and
+`InflateReader` wrap streams and use constant memory (about 1 MiB each)
+however much data passes through.
+
+```c
+import compress::flate, std::io;
+
+// Compress: everything written to the writer ends up compressed in `out`.
+DeflateWriter w;
+w.init(mem, &out);          // out: any OutStream
+io::copy_to(&in, &w)!!;     // or w.write(...) as often as needed
+w.close()!!;                // writes the final block; must be called
+w.free();
+
+// Decompress: reading from the reader yields the original bytes.
+InflateReader r;
+r.init(mem, &compressed);   // compressed: any InStream
+io::copy_to(&r, &out)!!;
+r.free();
+```
+
+Shortcuts: `deflate_from(allocator, out, in, mode)` and
+`inflate_to(allocator, out, in)` run the whole copy.
+
+`InflateReader` reads its source in chunks, so it may consume more than the
+DEFLATE stream; `leftover()` returns the surplus after the stream ended (e.g.
+a gzip trailer). `inflate_stream` is the exact alternative: it reads a byte at
+a time and stops precisely at the end of the stream, but holds the output in
+memory. A 4.7 GB file compresses and decompresses through the streams with
+about 3 MB of resident memory, at roughly 95 MB/s and 450 MB/s on the test
+machine below.
+
 ### Performance
 
 The encoder uses a whole‑input hash‑chain matcher with lazy matching and picks
@@ -170,7 +204,7 @@ Potential future enhancements:
 
 - zlib and gzip container support (headers, checksums)
 - Compression levels (trade‑off between speed and ratio)
-- Streaming interfaces (incremental compression/decompression)
+- Streaming gzip (the gzip module still buffers the whole payload)
 - More advanced block‑splitting heuristics and match‑finding tuning
 
 ## License
