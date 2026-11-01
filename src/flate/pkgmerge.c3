@@ -28,7 +28,7 @@ fn char[] codelen(Allocator allocator, uint[] freqs, uint max_bits) => @pool()
 	foreach (i, freq: freqs)
 	{
 		if (freq == 0) continue;
-		map.push({i, freq});
+		map.push({(usz)i, freq});
 		n++;
 	}
 
@@ -37,7 +37,7 @@ fn char[] codelen(Allocator allocator, uint[] freqs, uint max_bits) => @pool()
 	// Sort frequencies in ascending order.
 	sort::quicksort(map.array_view());
 
-	uint[] hist = mem::temp_array(uint, n);
+	uint[] hist = mem::temp_array(uint, (sz)n);
 	foreach (i, m: map) hist[i] = m.freq;
 
 
@@ -45,16 +45,16 @@ fn char[] codelen(Allocator allocator, uint[] freqs, uint max_bits) => @pool()
 	// if (n <= 2)
 	if (n <= 1)//  FIXME
 	{
-		char[] blen = allocator::new_array(allocator, char, freqs.len);
+		char[] blen = alloc::new_array(allocator, char, (sz)freqs.len);
 		foreach (m:map) blen[m.index] = 1;
 		return blen;
 	}
 
 	// Require two scratch buffers to process iterations and some bitmasks.
 	usz max_elements = 2 * n;
-	uint[] current = mem::temp_array(uint, max_elements);
-	uint[] previous = mem::temp_array(uint, max_elements);
-	ulong[] is_merged = mem::temp_array(ulong, max_elements);
+	uint[] current = mem::temp_array(uint, (sz)max_elements);
+	uint[] previous = mem::temp_array(uint, (sz)max_elements);
+	ulong[] is_merged = mem::temp_array(ulong, (sz)max_elements);
 
 	// Initial value of "previous" is the histogram.
 	previous[:n] = hist[:n];
@@ -72,7 +72,7 @@ fn char[] codelen(Allocator allocator, uint[] freqs, uint max_bits) => @pool()
 	uint bits;
 	for (bits = max_bits - 1; bits > 0; bits--)
 	{
-		num_previous &= ~1;
+		num_previous &= ~(usz)1;
 
 		current[0] = hist[0];
 		current[1] = hist[1];
@@ -160,7 +160,7 @@ fn char[] codelen(Allocator allocator, uint[] freqs, uint max_bits) => @pool()
 	for (usz i = 0; i < num_analyze; i++) hist[i]++;
 
 	// Remap to correct indices.
-	char[] blen = allocator::new_array(allocator, char, freqs.len);
+	char[] blen = alloc::new_array(allocator, char, (sz)freqs.len);
 	foreach (i, m: map)
 	{
 		blen[m.index] = (char)hist[i];

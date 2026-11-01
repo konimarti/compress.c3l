@@ -29,16 +29,16 @@ struct Gzip
 fn void Gzip.free(&self)
 {
 	if (!self.allocator) return;
-	if (self.extra.ptr) allocator::free(self.allocator, self.extra.ptr);
+	if (self.extra.ptr) alloc::free(self.allocator, self.extra.ptr);
 	if (self.filename.len) self.filename.free(self.allocator);
 	if (self.comment.len) self.comment.free(self.allocator);
-	if (self.uncompressed.ptr) allocator::free(self.allocator, self.uncompressed.ptr);
+	if (self.uncompressed.ptr) alloc::free(self.allocator, self.uncompressed.ptr);
 }
 
 fn char[]? uncompress_bytes(Allocator allocator, char[] src) @inline => @pool()
 {
 	Gzip gz = uncompress_stream(tmem, &&io::wrap_bytes(src))!;
-	return allocator::clone_slice(allocator, gz.uncompressed);
+	return alloc::clone_slice(allocator, gz.uncompressed);
 }
 
 fn Gzip? uncompress(Allocator allocator, char[] src) @inline
@@ -58,7 +58,7 @@ fn Gzip? uncompress_stream(Allocator allocator, InStream reader)
 
 		InStream header_reader = (TeeReader){}.init(reader, &crc);
 
-		header_reader.read((char[GzipHeader.sizeof]*)&gz.header)!;
+		header_reader.read((char[GzipHeader::size]*)&gz.header)!;
 
 		if (gz.header.id.val != GZIP_MAGIC) return CORRUPT_HEADER~;
 		if (gz.header.cm != 8) return CORRUPT_HEADER~;
@@ -67,7 +67,7 @@ fn Gzip? uncompress_stream(Allocator allocator, InStream reader)
 		if (gz.header.flg & FEXTRA)
 		{
 			ushort xlen = io::read_le_ushort(header_reader)!;
-			gz.extra = allocator::malloc(allocator, xlen)[:xlen];
+			gz.extra = alloc::malloc(allocator, xlen)[:xlen];
 			header_reader.read(gz.extra)!;
 		}
 
@@ -128,10 +128,10 @@ fn void? compress_stream(OutStream writer, char[] src, bool hcrc = false,
 		ByteWriter h;
 		h.tinit();
 
-		h.write((char[GzipHeader.sizeof]*)&header)!;
+		h.write((char[GzipHeader::size]*)&header)!;
 		if (extra.len)
 		{
-			io::write_le_short(&h, (ushort)extra.len)!;
+			io::write_le_short(&h, (short)extra.len)!;
 			h.write(extra)!;
 		}
 		if (name.len)
@@ -145,7 +145,7 @@ fn void? compress_stream(OutStream writer, char[] src, bool hcrc = false,
 		if (hcrc)
 		{
 			uint crc_hash = crc32::hash(h.array_view());
-			io::write_le_short(&h, (ushort)(crc_hash & 0xFF_FF))!;
+			io::write_le_short(&h, (short)(crc_hash & 0xFF_FF))!;
 		}
 
 		writer.write(h.array_view())!;
@@ -153,8 +153,8 @@ fn void? compress_stream(OutStream writer, char[] src, bool hcrc = false,
 
 	flate::deflate_stream(writer, src)!;
 
-	io::write_le_int(writer, crc32::hash(src))!;
-	io::write_le_int(writer, src.len & 0xFF_FF_FF_FF)!;
+	io::write_le_int(writer, (int)crc32::hash(src))!;
+	io::write_le_int(writer, (int)(src.len & 0xFF_FF_FF_FF))!;
 }
 
 module compress::gzip @private;
@@ -177,7 +177,7 @@ fn void CrcWriter.init(&self)
 	self.hash.init();
 }
 
-fn usz? CrcWriter.write(&self, char[] bytes) @dynamic
+fn sz? CrcWriter.write(&self, char[] bytes) @dynamic
 {
 	self.hash.update(bytes);
 	return bytes.len;
@@ -185,7 +185,7 @@ fn usz? CrcWriter.write(&self, char[] bytes) @dynamic
 
 fn void? CrcWriter.write_byte(&self, char c) @dynamic
 {
-	self.hash.updatec(c);
+	self.hash.update_byte(c);
 }
 
 fn uint CrcWriter.final(&self) => self.hash.final();
@@ -275,7 +275,7 @@ fn void gzip_round_trip() @test
 
 	char[] gz = gzip::compress(mem, data, hcrc: true,
 	extra: extra, name: filename, comment: comment)!!;
-	defer allocator::free(mem, gz.ptr);
+	defer alloc::free(mem, gz.ptr);
 
 	Gzip decode = gzip::uncompress(mem, gz)!!;
 	defer decode.free();

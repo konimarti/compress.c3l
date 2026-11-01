@@ -50,7 +50,7 @@ fn void HuffCodes.reverse(&self)
 	foreach (i, &code: self.codes)
 	{
 		if (self.blen[i] == 0) continue;
-		uint shift = $typeof(*code).sizeof * 8 - self.blen[i];
+		uint shift = @sizeof(*code) * 8 - self.blen[i];
 		*code = bits::reverse(*code << shift);
 	}
 }
@@ -169,7 +169,7 @@ fn HuffOrder build_canonical_symbols(char[] lengths)
 		offs[len+1] = offs[len] + h.counts[len];
 	}
 
-	foreach (int sym, len: lengths)
+	foreach (uint sym, len: lengths)
 	{
 		if (len != 0) h.symbols[offs[len]++] = sym;
 	}

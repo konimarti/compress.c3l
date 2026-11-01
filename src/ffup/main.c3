@@ -156,7 +156,7 @@ fn Option[]? getopts(Allocator allocator, String[] args, String optstring, int *
 
 		arg = arg[1..];
 		foreach (c : arg) {
-			usz pos = optstring.index_of_char(c)!;
+			usz pos = (usz)optstring.index_of_char(c)!;
 			bool hasArgument = pos+1 < optstring.len && optstring[pos+1] == ':';
 			if (hasArgument) {
 				if (args.len >= 2) {

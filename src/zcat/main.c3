@@ -4,13 +4,13 @@ import std::io, compress::gzip;
 fn void main(String[] args) => @assert_leak()
 {
 	char[] bytes = io::read_fully(mem, io::stdin())!!;
-	defer allocator::free(mem, bytes.ptr);
+	defer alloc::free(mem, bytes.ptr);
 
 	if (args.len > 1 && args[1] == "-c")
 	{
 		char[] out = gzip::compress(mem, bytes)!!;
 		io::printf("%s", (String)out);
-		allocator::free(mem, out.ptr);
+		alloc::free(mem, out.ptr);
 	}
 	else
 	{

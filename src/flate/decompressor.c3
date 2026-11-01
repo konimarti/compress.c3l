@@ -104,7 +104,7 @@ fn void? FlateDecompressor.decode_trees(&self)
 
 	nlit = self.getbits(5)! + 257;
 	ndist = self.getbits(5)! + 1;
-	nclen = self.getbits(4)! + 4;
+	nclen = (int)self.getbits(4)! + 4;
 
 	// Read bit lengths for code length codes.
 	lengths[:19] = 0;
@@ -126,13 +126,13 @@ fn void? FlateDecompressor.decode_trees(&self)
 		{
 			case 16:
 				sym = lengths[num-1];
-				len = self.getbits(2)! + 3;
+				len = (int)self.getbits(2)! + 3;
 			case 17:
 				sym = 0;
-				len = self.getbits(3)! + 3;
+				len = (int)self.getbits(3)! + 3;
 			case 18:
 				sym = 0;
-				len = self.getbits(7)! + 11;
+				len = (int)self.getbits(7)! + 11;
 		}
 		while (len--) lengths[num++] = (char)sym;
 	}
@@ -201,11 +201,11 @@ fn int? FlateDecompressor.decode_symbol(&self, HuffOrder *h)
 	code = 0; first = 0; index = 0;
 	for (int len = 1; len <= huff::MAX_CODE_BITS; len++)
 	{
-		code = (code << 1) | self.getbits(1)!;
-		count = h.counts[len];
+		code = (code << 1) | (int)self.getbits(1)!;
+		count = (int)h.counts[len];
 		if (code - count < first)
 		{
-			return h.symbols[index + (code - first)];
+			return (int)h.symbols[index + (code - first)];
 		}
 		index += count;
 		first += count;

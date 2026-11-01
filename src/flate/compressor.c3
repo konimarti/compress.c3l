@@ -61,7 +61,7 @@ fn void? FlateCompressor.build_trees(&self, LzToken[] tokens)
 		switch (token.type)
 		{
 			case LITERAL:
-				if (lt_freqs[token.lit] == uint.max)
+				if (lt_freqs[token.lit] == uint::max)
 				{
 					// Overflow check.
 					continue;
@@ -70,7 +70,7 @@ fn void? FlateCompressor.build_trees(&self, LzToken[] tokens)
 
 			case MATCH:
 				index = 257 + huff_index_lookup(&len_base, token.length());
-				if (lt_freqs[index] == uint.max)
+				if (lt_freqs[index] == uint::max)
 				{
 					// Overflow check.
 					continue;
@@ -78,7 +78,7 @@ fn void? FlateCompressor.build_trees(&self, LzToken[] tokens)
 				lt_freqs[index]++;
 
 				index = huff_index_lookup(&dist_base, token.offset());
-				if (dt_freqs[index] == uint.max)
+				if (dt_freqs[index] == uint::max)
 				{
 					// Overflow check.
 					continue;
@@ -110,15 +110,15 @@ fn void? FlateCompressor.write_dynamic_header(&self, bool bfinal = true) => @poo
 	char sym;
 	uint i, hlit, hdist, hclen;
 
-	hlit = (self.lt.max_sym < 257) ? 0 : self.lt.max_sym + 1 - 257;
-	hdist = self.dt.max_sym;
+	hlit = (self.lt.max_sym < 257) ? 0 : (uint)(self.lt.max_sym + 1 - 257);
+	hdist = (uint)self.dt.max_sym;
 
 	// Create run-length encoder.
 	CodeLengthEncoder encoder;
 	encoder.init(tmem);
 	encoder.encode(self.lt.blen[:hlit+257], self.dt.blen[:hdist+1])!;
 
-	hclen = encoder.max_sym + 1 - 4;
+	hclen = (uint)(encoder.max_sym + 1 - 4);
 
 	// Write block header.
 	// Push BFINAL (0b1 or 0b0) and BTYPE (0b10).
@@ -338,11 +338,11 @@ fn void? CodeLengthEncoder.encode(&self, char[] lt_len, char[] dt_len)
 	uint[19] freqs;
 
 	n = lt_len.len + dt_len.len;
-	self.encoded.ensure_capacity(n)!;
+	self.encoded.ensure_capacity((sz)n)!;
 	@pool()
 	{
 		// Combine literal/length and distance code lengths.
-		char[] lengths = mem::temp_array(char, n);
+		char[] lengths = mem::temp_array(char, (sz)n);
 		lengths[:lt_len.len] = lt_len[:lt_len.len];
 		lengths[lt_len.len:dt_len.len] = dt_len[:dt_len.len];
 

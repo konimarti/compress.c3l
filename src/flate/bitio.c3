@@ -60,7 +60,7 @@ fn void? FlateWriter.write_bits(&self, uint bits, uint num_bits)
 *>
 fn void? FlateWriter.flush(&self)
 {
-	int rem;
+	uint rem;
 	while (self.nbits)
 	{
 		rem = self.nbits > 8 ? 8 : self.nbits;
@@ -110,7 +110,7 @@ fn char? FlateReader.read_byte(&self) @dynamic
  This requires that the internal bit buffer is empty, ensuring consistent
  alignment between byte-wise and bit-wise operations.
 *>
-fn usz? FlateReader.read(&self, char[] buf) @dynamic
+fn sz? FlateReader.read(&self, char[] buf) @dynamic
 {
 	assert(self.nbits == 0);
 	return self.reader.read(buf);
@@ -125,7 +125,7 @@ fn usz? FlateReader.read(&self, char[] buf) @dynamic
  @param num_bits : "Number of bits to peek"
  @require num_bits > 0 && num_bits <= 32
 *>
-fn uint? FlateReader.peek_bits(&self, isz num_bits)
+fn uint? FlateReader.peek_bits(&self, sz num_bits)
 {
 	while (self.nbits < num_bits)
 	{

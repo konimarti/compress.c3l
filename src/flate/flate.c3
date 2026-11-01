@@ -265,7 +265,7 @@ fn void test_deflate_embedded_stream() => @pool()
 	defer free(compressed.ptr);
 
 	usz append_len = compressed.len + 1;
-	char[] append = mem::malloc(append_len)[:append_len];
+	char[] append = mem::malloc((sz)append_len)[:append_len];
 	defer free(append.ptr);
 
 	append[:compressed.len] = compressed[..];

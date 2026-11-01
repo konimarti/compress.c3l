@@ -10,7 +10,7 @@ const uint MIN_OFFSET_LEN  = 1;
 const uint HASH_SIZE       = 1U << 15;
 const uint HASH_MASK       = HASH_SIZE - 1;
 
-enum LzTokenType : inline char
+enum LzTokenType : char
 {
 	INVALID,
 	LITERAL,
@@ -49,7 +49,7 @@ fn LzToken make_literal(char literal)
 	};
 }
 
-fn usz? LzToken.to_format(&self, Formatter *f) @dynamic
+fn sz? LzToken.to_format(&self, Formatter *f) @dynamic
 {
 	switch (self.type)
 	{
@@ -90,8 +90,8 @@ struct LzMatchFinder
 fn void LzMatchFinder.init(&self, Allocator allocator)
 {
 	self.rb.init();
-	self.head = allocator::new_array(allocator, int, HASH_SIZE);
-	self.prev = allocator::new_array(allocator, int, MAX_WINDOW_SIZE);
+	self.head = alloc::new_array(allocator, int, HASH_SIZE);
+	self.prev = alloc::new_array(allocator, int, MAX_WINDOW_SIZE);
 	self.head[..] = -1;
 	self.prev[..] = -1;
 	self.allocator = allocator;
@@ -99,8 +99,8 @@ fn void LzMatchFinder.init(&self, Allocator allocator)
 
 fn void LzMatchFinder.free(&self)
 {
-	allocator::free(self.allocator, self.head);
-	allocator::free(self.allocator, self.prev);
+	alloc::free(self.allocator, self.head);
+	alloc::free(self.allocator, self.prev);
 	*self = {};
 }
 
@@ -138,16 +138,16 @@ fn LzMatch? LzMatchFinder.find_match(&self, int p, char[] lookahead)
 	// Iterate the hash table and check valid candidates.
 	while (candidate >= 0)
 	{
-		dist_len = p - candidate;
+		dist_len = (uint)(p - candidate);
 		if (dist_len > MAX_WINDOW_SIZE)
 		{
 			// "Remove" node.
-			self.prev[candidate & (MAX_WINDOW_SIZE-1)] = -1;
+			self.prev[(uint)candidate & (MAX_WINDOW_SIZE-1)] = -1;
 			break;
 		}
 
 		// Fill "sliding window".
-		n = (int)self.rb.read(candidate, window[:lookahead.len]);
+		n = (int)self.rb.read((usz)candidate, window[:lookahead.len]);
 		assert(n > 0);
 
 		// Fill up remaining bytes in sliding window from lookahead.
@@ -160,7 +160,7 @@ fn LzMatch? LzMatchFinder.find_match(&self, int p, char[] lookahead)
 
 		// Find matching length.
 		match_len = 0;
-		while (match_len < n && window[match_len] == lookahead[match_len])
+		while (match_len < (uint)n && window[match_len] == lookahead[match_len])
 		{
 				match_len++;
 		}
@@ -175,7 +175,7 @@ fn LzMatch? LzMatchFinder.find_match(&self, int p, char[] lookahead)
 		}
 
 		// Move to next match.
-		candidate = self.prev[candidate & (MAX_WINDOW_SIZE-1)];
+		candidate = self.prev[(uint)candidate & (MAX_WINDOW_SIZE-1)];
 	}
 
 	// Insert current hash.
@@ -187,7 +187,7 @@ fn LzMatch? LzMatchFinder.find_match(&self, int p, char[] lookahead)
 	if (best_len == 0 || best_dist == 0) return NOT_FOUND~;
 
 	// Insert all positions we're about to jump.
-	for (int i = 1; i < best_len; i++)
+	for (int i = 1; i < (int)best_len; i++)
 	{
 		self.put_char(lookahead[i]);
 		if (i < lookahead.len - 2)
@@ -217,18 +217,18 @@ fn LzToken[] tokenize(Allocator allocator, char[] bytes) => @pool()
 	LzMatchFinder mf;
 	mf.init(tmem);
 
-	n = bytes.len;
+	n = (int)bytes.len;
 	while (i < n - 2)
 	{
 		rem = n - i;
-		rem = rem > MAX_MATCH_LEN ? MAX_MATCH_LEN : rem;
+		rem = rem > (int)MAX_MATCH_LEN ? (int)MAX_MATCH_LEN : rem;
 		if (try match = mf.find_match(i, bytes[i:rem]))
 		{
 			// Note: If we implement lazy matching, ensure that
 			// logic from find_match about updating the sliding
 			// window is adjusted.
 			tokens.push(make_match(match.length, match.distance));
-			i += match.length;
+			i += (int)match.length;
 		}
 		else
 		{
@@ -262,11 +262,11 @@ fn char[] construct(Allocator allocator, LzToken[] tokens) => @pool()
 			case LITERAL:
 				buf.append_char(token.lit);
 			case MATCH:
-				usz start = buf.len() - token.offset();
+				usz start = (usz)(buf.len() - token.offset());
 				usz end   = start + token.length();
 				for (usz i = start; i < end; i++)
 				{
-					buf.append_char(buf[i]);
+					buf.append_char(buf[(sz)i]);
 				}
 			default:
 				continue;
