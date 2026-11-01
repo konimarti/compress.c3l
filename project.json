@@ -8,6 +8,10 @@
 			"type": "executable",
 			"sources": [ "src/ffup/main.c3" ]
 		},
+		"bench": {
+			"type": "executable",
+			"sources": [ "src/bench/main.c3" ]
+		},
 		"zcat": {
 			"type": "executable",
 			"sources": [ "src/zcat/main.c3" ]

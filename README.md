@@ -10,8 +10,8 @@ and lower‑level building blocks (`deflate` / `inflate`).
 
 - DEFLATE encode and decode (raw DEFLATE stream), and GZIP format.
 - Canonical Huffman code generation (fixed and dynamic trees)
-- LZ77 tokenizer with sliding window and hash‑chain match finder
-- Bit‑level I/O in LSB‑first order for DEFLATE’s bitstream
+- LZ77 matching with lazy evaluation and hash chains
+- Per‑block choice between stored, fixed and dynamic coding
 
 ### Getting Started
 
@@ -73,37 +73,25 @@ fn char[]? tuncompress(char[] bytes);
 
 ### Low‑Level DEFLATE API
 
-For more control over block structure and strategies, use `deflate` and `inflate`.
+`deflate` takes a block coding strategy; `inflate` / `inflate_stream` decode.
 
 ```c
 import compress::flate;
 
-alias DeflateBlockFn =
-    fn void?(FlateCompressor *c, char[] input_chunk, bool is_last_chunk);
+enum DeflateMode { AUTO, STORED, FIXED, DYNAMIC }
 
-// Core DEFLATE compressor with pluggable block encoder.
-fn char[]? deflate(Allocator allocator,
-                   char[] bytes,
-                   DeflateBlockFn block_fn = &flate::encode_dynamic_block,
-                   usz max_block_len = 65_535);
+// DEFLATE compressor. AUTO picks stored, fixed or dynamic Huffman per block,
+// whichever is smallest; the other modes force one coding.
+fn char[]? deflate(Allocator allocator, char[] bytes, DeflateMode mode = AUTO);
 
-// Core DEFLATE decompressor.
+// Same, but writes to an OutStream.
+fn void? deflate_stream(OutStream out, char[] bytes, DeflateMode mode = AUTO);
+
+// DEFLATE decompressor.
 fn char[]? inflate(Allocator allocator, char[] bytes);
-```
 
-#### Built‑in block encoders
-
-The library exposes three encoder strategies:
-
-```c
-// Stored (uncompressed) block.
-fn void? encode_stored_block(FlateCompressor *c, char[] chunk, bool is_last_chunk);
-
-// Fixed Huffman block (RFC 1951 §3.2.6).
-fn void? encode_fixed_block(FlateCompressor *c, char[] chunk, bool is_last_chunk);
-
-// Dynamic Huffman block (RFC 1951 §3.2.7).
-fn void? encode_dynamic_block(FlateCompressor *c, char[] chunk, bool is_last_chunk);
+// Reads from an InStream and consumes exactly the DEFLATE stream.
+fn char[]? inflate_stream(Allocator allocator, InStream stream);
 ```
 
 Example: force fixed‑Huffman encoding for a buffer:
@@ -112,22 +100,51 @@ Example: force fixed‑Huffman encoding for a buffer:
 fn void example_fixed_block() => @pool()
 {
     char[] input = "hello world world hello";
-    char[] compressed = flate::deflate(tmem, input, &flate::encode_fixed_block)!!;
+    char[] compressed = flate::deflate(tmem, input, FIXED)!!;
     char[] output = flate::inflate(tmem, compressed)!!;
     assert(output == input);
 }
 ```
 
+### Performance
+
+The encoder uses a whole‑input hash‑chain matcher with lazy matching and picks
+stored, fixed or dynamic coding per block; the decoder is table driven with a
+64‑bit bit buffer.
+
+Benchmark against `std::compression::deflate` (default settings). Median of at
+least 5 runs after a warm‑up, MB/s of uncompressed data. Each library's output
+is also decoded by the other library to check interoperability.
+
+| input | size | lib | ratio | compress MB/s | decompress MB/s |
+|---|---:|---|---:|---:|---:|
+| text (c3 stdlib sources) | 3.1 MB | c3l | **23.82%** | **129.8** | **745.2** |
+| | | std | 24.87% | 121.4 | 431.9 |
+| binary (c3c executable) | 16 MB | c3l | **39.52%** | **83.8** | **508.6** |
+| | | std | 40.39% | 79.5 | 295.0 |
+| skewed random bytes (synthetic) | 8 MB | c3l | **56.97%** | **64.9** | **310.7** |
+| | | std | 61.39% | 64.1 | 271.8 |
+| random bytes (synthetic) | 8 MB | c3l | **100.02%** | **649.4** | **32 743** |
+| | | std | 100.10% | 89.2 | 338.8 |
+| zeros (synthetic) | 8 MB | c3l | 0.10% | **5 892** | **1 015** |
+| | | std | 0.10% | 1 454 | 580.6 |
+
+Speed ratio c3l/std: compression 1.01x–7.3x on the non‑trivial inputs
+(1.05–1.07x on text and binary), decompression 1.14x–1.75x on compressible
+data. The decompression figure for random data is a plain copy of stored
+blocks. The gains on compression are modest on real data; the match finder is
+the same class of algorithm as std's, and the biggest wins come from the
+decoder and from handling incompressible and highly repetitive input.
+
+Setup: Intel Core i7‑14700, WSL2 (Linux 6.18), c3c 0.8.6 with `-O3`, single
+thread. Numbers vary by machine; reproduce with:
+
+```bash
+c3c -O3 build bench
+./build/bench --gen path/to/file1 path/to/file2   # --gen adds the synthetic inputs
+```
+
 ### Internal Modules Overview
-
-#### `compress::flate::bitio`
-
-Bit‑level I/O utilities:
-
-- `FlateWriter`: LSB‑first bit writer, flushes to an `OutStream`
-- `FlateReader`: LSB‑first bit reader on an `InStream`
-
-Used by both compressor and decompressor to match DEFLATE’s bit layout.
 
 #### `compress::flate::huff`
 
@@ -136,15 +153,9 @@ Canonical Huffman helpers:
 - `HuffCodes`: bit‑reversed canonical codes and lengths for encoding
 - `HuffOrder`: canonical symbol ordering and per‑length counts for decoding
 
-#### `compress::flate::lz77`
+#### `compress::flate::pkgmerge`
 
-LZ77 tokenizer and match finder:
-
-- Sliding‑window match finding with hash chains
-- `LzToken` type (literal and match tokens)
-- `tokenize(...)` to convert a byte slice to LZ77 tokens
-
-This module is intentionally focused and can be reused for other LZ77‑style compressors.
+Length‑limited Huffman code lengths via package‑merge.
 
 ### Roadmap / TODO
 

@@ -79,17 +79,17 @@ fn void main(String[] args) => @pool()
 	}
 	else
 	{
-		DeflateBlockFn deflate = &flate::encode_dynamic_block;
+		DeflateMode block_mode = AUTO;
 		switch (mode)
 		{
-			case STORE:   deflate = &flate::encode_stored_block;
-			case FIXED:   deflate = &flate::encode_fixed_block;
-			case DYNAMIC: deflate = &flate::encode_dynamic_block;
+			case STORE:   block_mode = STORED;
+			case FIXED:   block_mode = FIXED;
+			case DYNAMIC: block_mode = DYNAMIC;
 			case INFLATE: unreachable("internal error");
 		}
 
 		t = clock::now();
-		out = flate::deflate(tmem, bytes, deflate)!!;
+		out = flate::deflate(tmem, bytes, block_mode)!!;
 		elapsed = t.mark();
 
 		if (bytes.len)
