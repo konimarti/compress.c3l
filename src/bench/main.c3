@@ -81,7 +81,7 @@ fn Result run(Lib lib, char[] data, char[]* comp_out)
 fn void bench_one(String name, char[] data)
 {
 	Lib[2] libs = {
-		{ "c3l", &c3l_compress, &c3l_decompress },
+		{ "compress.c3l", &c3l_compress, &c3l_decompress },
 		{ "std", &std_compress, &std_decompress },
 	};
 	Result[2] res;
@@ -98,12 +98,12 @@ fn void bench_one(String name, char[] data)
 
 	foreach (i, lib : libs)
 	{
-		io::printfn("%-14s %10d  %-4s %7.2f%% %10.1f %12.1f",
+		io::printfn("%-14s %10d  %-12s %7.2f%% %10.1f %12.1f",
 			name, data.len, lib.name, 100.0 * res[i].comp_len / data.len,
 			res[i].comp_mbps, res[i].decomp_mbps);
 		free(comps[i].ptr);
 	}
-	io::printfn("%-14s %10s  %-4s %7s  %9.2fx %11.2fx", "", "", "c3l/std",
+	io::printfn("%-14s %10s  %-12s %7s  %9.2fx %11.2fx", "", "", "speedup",
 		"", res[0].comp_mbps / res[1].comp_mbps, res[0].decomp_mbps / res[1].decomp_mbps);
 }
 
@@ -133,7 +133,7 @@ fn int main(String[] args)
 		io::printn("usage: bench [--gen] <file>...");
 		return 1;
 	}
-	io::printfn("%-14s %10s  %-4s %8s %10s %12s", "input", "bytes", "lib", "ratio", "comp MB/s", "decomp MB/s");
+	io::printfn("%-14s %10s  %-12s %8s %10s %12s", "input", "bytes", "lib", "ratio", "comp MB/s", "decomp MB/s");
 	if (gen)
 	{
 		String[*] kinds = { "zeros", "random", "skewed" };
