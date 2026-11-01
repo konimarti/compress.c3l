@@ -139,8 +139,9 @@ the same class of algorithm as std's, and the biggest wins come from the
 decoder and from handling incompressible and highly repetitive input.
 
 The large input is 85 copies of the text file followed by 16 copies of the
-binary. Inputs of 4 GiB or more are not supported by `compress.c3l`'s
-encoder yet (positions are 32‑bit).
+binary. The encoder works on inputs of any size: it processes them in segments
+of 1 GiB (a 4.7 GB test input roundtrips), so matches do not cross a segment
+boundary.
 
 Setup: Intel Core i7‑14700, WSL2 (Linux 6.18), c3c 0.8.6 with `-O3`, single
 thread. Numbers vary by machine; reproduce with:

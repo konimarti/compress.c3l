@@ -34,9 +34,10 @@ struct DeflateParams
 	uint max_chain;  // Maximum hash chain candidates examined.
 	uint nice_len;   // Stop searching once a match this long is found.
 	uint lazy_len;   // Do not try a lazy match if the current one is at least this long.
+	usz segment;     // Inputs are processed in segments of this many bytes (at most 1 GiB).
 }
 
-const DeflateParams DEFAULT_PARAMS = { .max_chain = 16, .nice_len = 64, .lazy_len = 16 };
+const DeflateParams DEFAULT_PARAMS = { .max_chain = 16, .nice_len = 64, .lazy_len = 16, .segment = SEGMENT };
 
 struct Deflater @private
 {
@@ -415,6 +416,7 @@ fn void? Deflater.flush_block(&self, bool last) => @pool()
 
 // ------------------------------------------------------------------- driver
 
+const usz SEGMENT = 1U << 30;
 const usz STREAM_BUF = BLOCK_TOKENS * 6 + 4096;
 
 <*
@@ -431,7 +433,6 @@ fn void? deflate_fast(OutStream out, char[] bytes, DeflateMode mode = AUTO,
 	d.setup();
 
 	usz n = bytes.len;
-	assert(n < (usz)uint::max - 1024, "input too large");
 	d.head = alloc::new_array(tmem, uint, 1U << FAST_HASH_BITS);
 	d.prev = alloc::new_array(tmem, ushort, FAST_WSIZE);
 	d.tokens = alloc::new_array(tmem, uint, BLOCK_TOKENS);
@@ -449,13 +450,35 @@ fn void? deflate_fast(OutStream out, char[] bytes, DeflateMode mode = AUTO,
 		return d.send();
 	}
 
-	uint end = (uint)n;
-	if (mode == STORED)
+	// The matcher uses 32-bit positions, so huge inputs are processed in
+	// segments. Matches do not cross segment boundaries, which costs at most
+	// one window of history per segment.
+	usz seg = params.segment;
+	assert(seg > 0 && seg <= SEGMENT);
+	for (usz off = 0; off < n; off += seg)
 	{
-		d.write_stored(0, end, true)!;
-		d.drain(true);
-		return d.send();
+		usz len = n - off > seg ? seg : n - off;
+		bool last = off + len >= n;
+		d.input = bytes[off:len];
+		d.block_start = 0;
+		if (mode == STORED)
+		{
+			d.write_stored(0, (uint)len, last)!;
+			continue;
+		}
+		mem::clear(d.head, (usz)(4U << FAST_HASH_BITS));
+		d.run_segment(last)!;
 	}
+	d.drain(true);
+	d.send()!;
+}
+
+<* Compresses d.input as one segment; BFINAL is set only if last. *>
+fn void? Deflater.run_segment(&self, bool last)
+{
+	Deflater* d = self;
+	char[] bytes = self.input;
+	uint end = (uint)bytes.len;
 	uint p = 0;
 	uint cl = 0;
 	uint cd = 0;
@@ -526,12 +549,12 @@ fn void? deflate_fast(OutStream out, char[] bytes, DeflateMode mode = AUTO,
 			if (q + 8 <= end) d.insert(q);
 		}
 	}
-	d.flush_block(true)!;
-	d.drain(true);
-	d.send()!;
+	d.flush_block(last)!;
 }
 
+
 module compress::flate::fast_test;
+import std::io;
 import compress::flate;
 
 fn void roundtrip(char[] data) => @pool()
@@ -588,6 +611,23 @@ fn void test_fast_forced_modes() @test => @pool()
 	// Stored mode: 3 blocks of at most 65535 bytes, 5 bytes of header each.
 	assert(flate::deflate(tmem, data, STORED)!!.len == data.len + 4 * 5);
 	assert(flate::deflate(tmem, "hello world", STORED)!!.len == 1 + 2 + 2 + 11);
+}
+
+fn void test_fast_segments() @test => @pool()
+{
+	// Tiny segments force many segment boundaries, including a partial last one.
+	char[] data = mem::talloc_array(char, 400_001);
+	foreach (i, &c : data) *c = (char)((i * i) >> 9);
+	DeflateParams p = flate::DEFAULT_PARAMS;
+	p.segment = 100_000;
+	DeflateMode[*] modes = { AUTO, STORED };
+	foreach (mode : modes)
+	{
+		ByteWriter w;
+		w.tinit();
+		flate::deflate_fast(&w, data, mode, p)!!;
+		assert(flate::inflate(tmem, w.array_view())!! == data);
+	}
 }
 
 fn void test_fast_code_length_runs() @test => @pool()
